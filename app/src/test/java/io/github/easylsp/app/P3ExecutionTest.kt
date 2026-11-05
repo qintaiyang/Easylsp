@@ -36,7 +36,8 @@ class P3ExecutionTest {
             val pid = File(dir, "child.pid").readText().trim()
             withTimeout(3000) { job.cancelAndJoin() }
             val stat = File("/proc/$pid/stat")
-            assertTrue(!stat.exists() || stat.readText().substringAfterLast(") ").startsWith("Z "))
+            val state = try { String(Files.readAllBytes(stat.toPath())) } catch (_: java.nio.file.NoSuchFileException) { null }
+            assertTrue(state == null || state.substringAfterLast(") ").startsWith("Z "))
         } finally { dir.deleteRecursively() }
     }
     @Test fun executionStorePersistsPagesOwnershipAndInterruptedState() {

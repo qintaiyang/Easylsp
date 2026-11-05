@@ -77,6 +77,7 @@ val standaloneAssets = tasks.register<Copy>("prepareStandaloneTemplate") {
 android.sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/standaloneAssets"))
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach { dependsOn(standaloneAssets) }
 tasks.withType<Test>().configureEach {
+    testLogging.exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
     dependsOn(standaloneAssets)
     systemProperty("easylsp.standaloneTemplate", project(":standalone-template").layout.buildDirectory.file("outputs/apk/debug/standalone-template-debug.apk").get().asFile.absolutePath)
     systemProperty("easylsp.debugKeystore", android.signingConfigs.getByName("debug").storeFile!!.absolutePath)
