@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(easylsp_native C)
+find_package(shadowhook REQUIRED CONFIG)
+add_library(easylsp_native SHARED native_runtime.c native_plugin.c)
+target_compile_options(easylsp_native PRIVATE -std=c11 -Wall -Wextra -Werror -O2)
+target_link_libraries(easylsp_native shadowhook::shadowhook dl log)

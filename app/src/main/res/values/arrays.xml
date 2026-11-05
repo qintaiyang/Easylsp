@@ -1,0 +1,1 @@
+<resources><string-array name="xposed_scope"><item>io.github.easylsp</item><item>io.github.easylsp.demo</item></string-array></resources>

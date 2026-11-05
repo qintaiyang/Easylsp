@@ -1,0 +1,376 @@
+{
+  "schemaVersion": 1,
+  "status": "design-draft",
+  "description": "Host-side grouping labels are used by tool discovery. Skill suggestions and unimplemented tool names remain draft; the actual runtime registry determines availability. No Skill is required for direct tool use.",
+  "groups": [
+    {
+      "id": "workspace.files",
+      "description": "当前工作区文件操作",
+      "scopes": [
+        "GLOBAL",
+        "PROJECT"
+      ],
+      "tools": [
+        "list_files",
+        "search_files",
+        "read_file",
+        "write_file",
+        "apply_patch"
+      ]
+    },
+    {
+      "id": "workspace.execution",
+      "description": "Android/Linux 终端与执行输出",
+      "scopes": [
+        "GLOBAL",
+        "PROJECT"
+      ],
+      "tools": [
+        "run_command",
+        "run_linux",
+        "linux_status",
+        "read_execution",
+        "write_stdin",
+        "stop_execution"
+      ]
+    },
+    {
+      "id": "network.fetch",
+      "description": "按需获取网页正文",
+      "scopes": [
+        "GLOBAL",
+        "PROJECT"
+      ],
+      "tools": [
+        "fetch_url",
+        "download_file"
+      ]
+    },
+    {
+      "id": "phone",
+      "description": "跨应用手机交互",
+      "scopes": [
+        "GLOBAL",
+        "PROJECT"
+      ],
+      "tools": [
+        "phone_use"
+      ]
+    },
+    {
+      "id": "memory",
+      "description": "全局与当前项目记忆",
+      "scopes": [
+        "GLOBAL",
+        "PROJECT"
+      ],
+      "tools": [
+        "search_memory",
+        "read_memory",
+        "save_memory",
+        "update_memory",
+        "delete_memory"
+      ]
+    },
+    {
+      "id": "config.models",
+      "description": "供应商和模型配置",
+      "scopes": [
+        "GLOBAL",
+        "PROJECT"
+      ],
+      "tools": [
+        "list_providers",
+        "list_models",
+        "configure_provider",
+        "configure_model",
+        "select_model",
+        "list_provider_models"
+      ]
+    },
+    {
+      "id": "config.skills",
+      "description": "Skill 包管理",
+      "scopes": [
+        "GLOBAL",
+        "PROJECT"
+      ],
+      "tools": [
+        "create_skill",
+        "update_skill",
+        "install_skill",
+        "set_skill_enabled",
+        "import_skill_zip",
+        "import_skill_github"
+      ]
+    },
+    {
+      "id": "config.mcp",
+      "description": "MCP 服务配置",
+      "scopes": [
+        "GLOBAL",
+        "PROJECT"
+      ],
+      "tools": [
+        "configure_mcp_server",
+        "set_mcp_enabled",
+        "test_mcp_server",
+        "refresh_mcp_tools"
+      ]
+    },
+    {
+      "id": "extensions",
+      "description": "已启用 MCP 的按需工具与资源访问",
+      "scopes": [
+        "GLOBAL",
+        "PROJECT"
+      ],
+      "tools": [
+        "list_extensions",
+        "list_extension_tools",
+        "select_extension_tools",
+        "call_extension_tool",
+        "list_extension_resources",
+        "read_extension_resource"
+      ]
+    },
+    {
+      "id": "sessions",
+      "description": "会话与独立分支",
+      "scopes": [
+        "GLOBAL",
+        "PROJECT"
+      ],
+      "tools": [
+        "list_conversations",
+        "search_conversations",
+        "read_conversation",
+        "create_conversation",
+        "send_to_conversation",
+        "fork_conversation",
+        "archive_conversation"
+      ]
+    },
+    {
+      "id": "agents",
+      "description": "持久化子代理管理",
+      "scopes": [
+        "GLOBAL",
+        "PROJECT"
+      ],
+      "tools": [
+        "spawn_agent",
+        "list_agents",
+        "send_agent_message",
+        "wait_agent",
+        "stop_agent"
+      ]
+    },
+    {
+      "id": "project.analysis",
+      "description": "绑定 APK 样本的静态分析",
+      "scopes": [
+        "PROJECT"
+      ],
+      "tools": [
+        "get_project_info",
+        "read_manifest",
+        "search_classes",
+        "search_strings",
+        "find_method",
+        "find_field",
+        "find_references",
+        "decompile_class",
+        "get_method_smali",
+        "list_resources",
+        "read_resource",
+        "capture_sample",
+        "analysis_query"
+      ]
+    },
+    {
+      "id": "project.plugins",
+      "description": "项目插件源码与参考资料",
+      "scopes": [
+        "PROJECT"
+      ],
+      "tools": [
+        "list_plugins",
+        "read_plugin",
+        "create_plugin",
+        "edit_plugin",
+        "read_plugin_logs",
+        "read_development_reference",
+        "import_plugin_zip",
+        "export_plugin_zip",
+        "export_plugin_apk",
+        "edit_plugin_metadata",
+        "delete_plugin",
+        "list_plugin_libraries",
+        "add_plugin_library",
+        "remove_plugin_library",
+        "read_plugin_files",
+        "write_plugin_file"
+      ]
+    },
+    {
+      "id": "project.java-runtime",
+      "description": "Java 插件加载与状态",
+      "scopes": [
+        "PROJECT"
+      ],
+      "tools": [
+        "load_plugin",
+        "reload_plugin",
+        "unload_plugin",
+        "get_plugin_status",
+        "set_plugin_enabled",
+        "plugin_action"
+      ]
+    },
+    {
+      "id": "project.native",
+      "description": "Native 插件构建、发布与状态",
+      "scopes": [
+        "PROJECT"
+      ],
+      "tools": [
+        "prepare_native_build_tools",
+        "build_native_plugin",
+        "enable_native_plugin",
+        "disable_native_plugin",
+        "get_native_plugin_status"
+      ]
+    },
+    {
+      "id": "skills.execution",
+      "description": "执行已有 Skill 脚本和程序",
+      "scopes": [
+        "GLOBAL",
+        "PROJECT"
+      ],
+      "tools": [
+        "run_skill",
+        "run_skill_script"
+      ]
+    },
+    {
+      "id": "environment.setup",
+      "description": "执行环境安装与实际权限状态",
+      "scopes": [
+        "GLOBAL",
+        "PROJECT"
+      ],
+      "tools": [
+        "get_root_status",
+        "install_linux"
+      ]
+    },
+    {
+      "id": "storage",
+      "description": "应用存储用量查询",
+      "scopes": [
+        "GLOBAL",
+        "PROJECT"
+      ],
+      "tools": [
+        "storage_summary"
+      ]
+    },
+    {
+      "id": "project.target",
+      "description": "项目目标进程生命周期",
+      "scopes": [
+        "PROJECT"
+      ],
+      "tools": [
+        "list_target_sessions",
+        "start_target",
+        "stop_target",
+        "restart_target",
+        "reconnect_target"
+      ]
+    },
+    {
+      "id": "project.inspection",
+      "description": "目标进程界面、性能与进程内存检视",
+      "scopes": [
+        "PROJECT"
+      ],
+      "tools": [
+        "viewTree",
+        "memory",
+        "performanceStart",
+        "performanceStop",
+        "creationStacks",
+        "inspect_target"
+      ]
+    },
+    {
+      "id": "project.native-analysis",
+      "description": "样本 SO、符号与反汇编",
+      "scopes": [
+        "PROJECT"
+      ],
+      "tools": [
+        "prepare_native_tools",
+        "list_native_modules",
+        "inspect_native_module",
+        "symbolize_native_address",
+        "disassemble_native"
+      ]
+    },
+    {
+      "id": "project.diagnostics",
+      "description": "启动证据采集、查询与导出",
+      "scopes": [
+        "PROJECT"
+      ],
+      "tools": [
+        "start_native_diagnostic",
+        "list_native_diagnostics",
+        "read_native_diagnostic",
+        "stop_native_diagnostic",
+        "export_native_report"
+      ]
+    },
+    {
+      "id": "project.instrumentation",
+      "description": "已有目标 Frida 注入",
+      "scopes": [
+        "PROJECT"
+      ],
+      "tools": [
+        "frida_attach"
+      ]
+    },
+    {
+      "id": "project.maintenance",
+      "description": "项目日志导出、清理与组织",
+      "scopes": [
+        "PROJECT"
+      ],
+      "tools": [
+        "export_project_logs",
+        "clear_project_logs",
+        "clear_storage",
+        "set_project_group"
+      ]
+    }
+  ],
+  "coreTools": [
+    "search_tools",
+    "select_tools",
+    "list_skills",
+    "activate_skill",
+    "read_skill",
+    "release_skill",
+    "ask_user",
+    "read_tool_output",
+    "update_plan"
+  ],
+  "defaultToolGroups": [
+    "workspace.files",
+    "workspace.execution"
+  ]
+}

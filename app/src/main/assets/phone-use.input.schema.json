@@ -1,0 +1,458 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Easylsp phone_use input v1",
+  "description": "Snapshot coordinates use the observation coordinate space.",
+  "type": "object",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "const": "status"
+        }
+      },
+      "required": [
+        "action"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "const": "release"
+        }
+      },
+      "required": [
+        "action"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "const": "list_apps"
+        },
+        "query": {
+          "type": "string"
+        },
+        "cursor": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 30
+        }
+      },
+      "required": [
+        "action"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "const": "observe"
+        },
+        "mode": {
+          "enum": [
+            "nodes",
+            "screen",
+            "both"
+          ],
+          "default": "nodes"
+        },
+        "displayId": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "query": {
+          "type": "string"
+        },
+        "cursor": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 30
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "screen"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "query"
+                  ]
+                },
+                {
+                  "required": [
+                    "cursor"
+                  ]
+                },
+                {
+                  "required": [
+                    "limit"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "const": "launch"
+        },
+        "packageName": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "action",
+        "packageName"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "const": "open_uri"
+        },
+        "uri": {
+          "type": "string",
+          "format": "uri",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "action",
+        "uri"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "const": "tap"
+        },
+        "snapshotId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target": {
+          "$ref": "#/$defs/target"
+        }
+      },
+      "required": [
+        "action",
+        "snapshotId",
+        "target"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "const": "long_press"
+        },
+        "snapshotId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target": {
+          "$ref": "#/$defs/target"
+        },
+        "durationMs": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 600
+        }
+      },
+      "required": [
+        "action",
+        "snapshotId",
+        "target"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "const": "swipe"
+        },
+        "snapshotId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "from": {
+          "$ref": "#/$defs/point"
+        },
+        "to": {
+          "$ref": "#/$defs/point"
+        },
+        "durationMs": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 400
+        }
+      },
+      "required": [
+        "action",
+        "snapshotId",
+        "from",
+        "to"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "const": "gesture"
+        },
+        "snapshotId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "strokes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/stroke"
+          }
+        }
+      },
+      "required": [
+        "action",
+        "snapshotId",
+        "strokes"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "const": "set_text"
+        },
+        "snapshotId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "nodeId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "snapshotId",
+        "nodeId",
+        "text"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "const": "key"
+        },
+        "key": {
+          "enum": [
+            "back",
+            "home",
+            "recents",
+            "notifications",
+            "quick_settings",
+            "enter",
+            "volume_up",
+            "volume_down",
+            "power",
+            "power_dialog",
+            "lock_screen",
+            "screenshot"
+          ]
+        }
+      },
+      "required": [
+        "action",
+        "key"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "const": "wait"
+        },
+        "condition": {
+          "enum": [
+            "idle",
+            "window_changed",
+            "text_visible"
+          ]
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000,
+          "default": 3000
+        },
+        "snapshotId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "action",
+        "condition"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "condition": {
+                "const": "window_changed"
+              }
+            },
+            "required": [
+              "condition"
+            ]
+          },
+          "then": {
+            "required": [
+              "snapshotId"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "condition": {
+                "const": "text_visible"
+              }
+            },
+            "required": [
+              "condition"
+            ]
+          },
+          "then": {
+            "required": [
+              "text"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "$defs": {
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "y": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ]
+    },
+    "target": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "nodeId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "nodeId"
+          ]
+        },
+        {
+          "$ref": "#/$defs/point"
+        }
+      ]
+    },
+    "stroke": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "startMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "durationMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "points": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/point"
+          }
+        }
+      },
+      "required": [
+        "startMs",
+        "durationMs",
+        "points"
+      ]
+    }
+  }
+}

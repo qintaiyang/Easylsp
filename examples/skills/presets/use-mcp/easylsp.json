@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "scopes": [
+    "GLOBAL",
+    "PROJECT"
+  ],
+  "toolGroups": [
+    "extensions"
+  ],
+  "optionalToolGroups": []
+}

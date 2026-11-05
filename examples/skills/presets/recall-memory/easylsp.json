@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "scopes": [
+    "GLOBAL",
+    "PROJECT"
+  ],
+  "toolGroups": [
+    "memory"
+  ],
+  "optionalToolGroups": [
+    "sessions"
+  ]
+}

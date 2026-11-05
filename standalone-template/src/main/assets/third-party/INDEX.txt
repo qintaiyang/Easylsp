@@ -1,0 +1,4 @@
+Easylsp standalone module and plugin API/runtime: GPL-3.0-or-later, source: the accompanying Easylsp source distribution (standalone-template, hook-runtime, plugin-api).
+BeanShell 2.1.1: Apache-2.0, https://github.com/beanshell/beanshell/tree/2.1.1
+Xposed API 82 (retained source adapter) and libxposed API 101.0.1 are compile-only dependencies, not bundled. The APK registers the modern entry only and requires API 101 or newer.
+Exported scripts retain their respective copyright/license.

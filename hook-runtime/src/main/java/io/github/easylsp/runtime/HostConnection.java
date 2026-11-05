@@ -1,0 +1,159 @@
+package io.github.easylsp.runtime;
+import android.app.Application;
+import android.content.*;
+import android.os.*;
+import android.os.Process;
+import android.util.Log;
+import io.github.easylsp.api.HookDriver;
+import io.github.easylsp.api.internal.Protocol;
+import io.github.easylsp.api.internal.ipc.*;
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+
+public final class HostConnection implements ServiceConnection, PluginEngine.Events {
+    private final Application app;
+    private final Handler worker;
+    private final PluginEngine engine;
+    private final RuntimeInspector inspector;
+    private volatile IEasylspBridge bridge;
+    private volatile String session;
+    private boolean bound;
+    private final StartupDiagnostic diagnostic;
+    public HostConnection(Application app, HookDriver driver) {
+        this(app, driver, StartupDiagnostic.NONE);
+    }
+    HostConnection(Application app, HookDriver driver, StartupDiagnostic diagnostic) {
+        this.diagnostic = diagnostic;
+        this.app = app;
+        inspector = new RuntimeInspector(app, driver);
+        HandlerThread thread = new HandlerThread("Easylsp-runtime"); thread.start();
+        worker = new Handler(thread.getLooper());
+        engine = new PluginEngine(driver, app.getClassLoader(), app, this);
+    }
+    public void start() {
+        app.registerReceiver(new BroadcastReceiver() {
+            @Override public void onReceive(Context context, Intent intent) { worker.post(() -> { disconnect(); bind(); }); }
+        }, new IntentFilter(Protocol.RECONNECT_ACTION), Protocol.RECONNECT_PERMISSION, worker, Context.RECEIVER_EXPORTED);
+        worker.post(this::bind);
+    }
+    private void bind() {
+        Intent intent = new Intent().setComponent(new ComponentName(Protocol.MANAGER_PACKAGE, Protocol.BRIDGE_SERVICE));
+        bound = app.bindService(intent, this, Context.BIND_AUTO_CREATE);
+        if (!bound) Log.w("Easylsp", "管理端未安装或桥接不可用，请显式重新连接");
+    }
+    private void disconnect() {
+        engine.close();
+        bridge = null; session = null;
+        if (bound) { app.unbindService(this); bound = false; }
+    }
+    @Override public void onServiceConnected(ComponentName name, IBinder binder) {
+        worker.post(() -> {
+            bridge = IEasylspBridge.Stub.asInterface(binder);
+            try {
+                session = bridge.registerHost(Protocol.VERSION, app.getPackageName(), Application.getProcessName(), Process.myPid(), callback);
+                if (!diagnostic.runId.isEmpty()) {
+                    Bundle event = new Bundle(); event.putString("type", "diagnostic"); event.putString("diagnosticRunId", diagnostic.runId);
+                    event.putString("phase", "session_connected"); event.putString("mode", diagnostic.mode); publish(event);
+                }
+                publishNativeEvents();
+                if (diagnostic.suppressAutoLoad()) diagnostic.event("plugin_auto_load_suppressed");
+                else sync();
+            } catch (Exception error) { Log.e("Easylsp", "连接被拒绝", error); disconnect(); }
+        });
+    }
+    @Override public void onServiceDisconnected(ComponentName name) { worker.post(() -> { bridge = null; session = null; engine.close(); }); }
+    @Override public void onBindingDied(ComponentName name) { worker.post(this::disconnect); }
+    @Override public void onNullBinding(ComponentName name) { worker.post(this::disconnect); }
+    private final IHostCallback callback = new IHostCallback.Stub() {
+        @Override public void onRequest(String requestId, String sessionId, String operation, Bundle args, ParcelFileDescriptor script) {
+            final int callerUid = Binder.getCallingUid();
+            worker.post(() -> {
+                try (ParcelFileDescriptor descriptor = script) {
+                    if (callerUid != app.getPackageManager().getApplicationInfo(Protocol.MANAGER_PACKAGE, 0).uid) throw new SecurityException("命令来源不是管理端");
+                    if (!sessionId.equals(session)) return;
+                    String pluginId = args.getString("pluginId", "");
+                    switch (operation) {
+                        case "viewTree", "creationStacks", "performanceStart", "performanceRead", "performanceStop", "performanceOverlay", "inspectOverlay", "memory" -> { complete(requestId, true, inspector.execute(operation, args)); return; }
+                        case "ping" -> { }
+                        case "readNativeEvents" -> publishNativeEvents();
+                        case "syncPlugins" -> sync();
+                        case "getPluginState" -> engine.report(pluginId);
+                        case "unloadPlugin" -> engine.unload(pluginId);
+                        case "loadPlugin", "reloadPlugin" -> {
+                            long revision = args.getLong("revision");
+                            File cached = cache(pluginId, revision, descriptor);
+                            try (Reader reader = new InputStreamReader(new FileInputStream(cached), StandardCharsets.UTF_8)) {
+                                if (operation.equals("reloadPlugin")) engine.reload(pluginId, revision, reader, dependencyLoader(pluginId, revision)); else engine.load(pluginId, revision, reader, dependencyLoader(pluginId, revision));
+                            }
+                        }
+                        default -> throw new IllegalArgumentException("未知操作: " + operation);
+                    }
+                    complete(requestId, true, operation.equals("ping") ? app.getPackageName() + " / " + Application.getProcessName() + " / pid=" + Process.myPid() : "已完成");
+                } catch (Throwable error) { complete(requestId, false, error.toString()); }
+            });
+        }
+    };
+    private void publishNativeEvents() {
+        for (String line : io.github.easylsp.nativeengine.NativeRuntime.bufferedEvents()) {
+            Bundle event = new Bundle(); event.putString("type", "native"); event.putString("nativeEvent", line); publish(event);
+        }
+    }
+    private void sync() throws Exception {
+        List<Bundle> plugins = bridge.listPlugins(session);
+        for (Bundle item : plugins) {
+            if (!"BEANSHELL".equals(item.getString("runtime", "BEANSHELL"))) continue;
+            String id = item.getString("pluginId");
+            try {
+                if (item.getBoolean("desiredEnabled")) {
+                    long revision = item.getLong("revision");
+                    try (ParcelFileDescriptor fd = bridge.openPlugin(session, id, revision)) {
+                        File file = cache(id, revision, fd);
+                        try (Reader reader = new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8)) { engine.load(id, revision, reader, dependencyLoader(id, revision)); }
+                    }
+                } else engine.unload(id);
+            } catch (Throwable error) { Log.e("Easylsp", "同步插件失败: " + id, error); }
+        }
+    }
+    private ClassLoader dependencyLoader(String id, long revision) throws Exception {
+        java.util.ArrayList<java.nio.ByteBuffer> buffers = new java.util.ArrayList<>();
+        for (String name : bridge.listPluginLibraries(session, id, revision)) {
+            try (ParcelFileDescriptor fd = bridge.openPluginLibrary(session, id, revision, name); InputStream input = new ParcelFileDescriptor.AutoCloseInputStream(fd)) {
+                if (name.endsWith(".dex")) buffers.add(java.nio.ByteBuffer.wrap(input.readAllBytes()));
+                else try (java.util.zip.ZipInputStream zip = new java.util.zip.ZipInputStream(input)) {
+                    java.util.zip.ZipEntry entry;
+                    while ((entry = zip.getNextEntry()) != null) if (entry.getName().matches("classes(?:[0-9]+)?\\.dex")) buffers.add(java.nio.ByteBuffer.wrap(zip.readAllBytes()));
+                }
+            }
+        }
+        return buffers.isEmpty() ? app.getClassLoader() : new dalvik.system.InMemoryDexClassLoader(buffers.toArray(new java.nio.ByteBuffer[0]), app.getClassLoader());
+    }
+    private File cache(String id, long revision, ParcelFileDescriptor fd) throws IOException {
+        // IDs originate from the manager, but cross the Binder boundary here.
+        java.util.UUID.fromString(id);
+        File dir = new File(app.getCacheDir(), "easylsp"); dir.mkdirs();
+        File file = new File(dir, id + "-" + revision + ".java");
+        try (InputStream input = new ParcelFileDescriptor.AutoCloseInputStream(fd); OutputStream output = new FileOutputStream(file)) { input.transferTo(output); }
+        return file;
+    }
+    private void complete(String id, boolean success, String message) {
+        Bundle event = new Bundle(); event.putString("type", "result"); event.putString("requestId", id); event.putBoolean("success", success); event.putString("message", message); publish(event);
+    }
+    @Override public void state(String id, long revision, String instance, String state, String error) {
+        Bundle event = base(id, revision, instance); event.putString("type", "state"); event.putString("state", state); event.putString("error", error); publish(event);
+    }
+    @Override public void log(String id, long revision, String instance, String level, String message, Throwable error) {
+        Bundle event = base(id, revision, instance); event.putString("type", "log"); event.putString("level", level); event.putString("message", message + (error == null ? "" : "\n" + Log.getStackTraceString(error))); publish(event);
+    }
+    private Bundle base(String id, long revision, String instance) {
+        Bundle event = new Bundle(); event.putString("pluginId", id); event.putLong("revision", revision); event.putString("instanceId", instance); event.putLong("timestamp", System.currentTimeMillis()); return event;
+    }
+    private void publish(Bundle event) {
+        IEasylspBridge current = bridge; String currentSession = session;
+        if (current == null || currentSession == null) return;
+        String message = event.getString("message");
+        if ("log".equals(event.getString("type")) && message != null && message.length() > 16000) event.putString("message", message.substring(0, 16000) + "\n[单条日志已截断]");
+        try { current.publish(currentSession, event); }
+        catch (RemoteException error) { Log.e("Easylsp", "事件上报失败", error); }
+    }
+}

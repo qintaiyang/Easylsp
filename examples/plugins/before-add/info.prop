@@ -1,0 +1,7 @@
+id=before-add
+name=before-add
+version=1.0
+author=Easylsp contributors
+description=Original Easylsp demo plugin
+apiVersion=1
+entry=main.java

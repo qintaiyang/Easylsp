@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "scopes": [
+    "PROJECT"
+  ],
+  "toolGroups": [
+    "project.plugins"
+  ],
+  "optionalToolGroups": [
+    "project.analysis",
+    "project.java-runtime",
+    "project.native",
+    "project.target",
+    "project.diagnostics",
+    "project.native-analysis",
+    "project.inspection"
+  ]
+}

@@ -1,0 +1,5 @@
+SnakeYAML 2.3
+Copyright The SnakeYAML Authors
+Licensed under the Apache License, Version 2.0 (see Apache-2.0.txt).
+https://bitbucket.org/snakeyaml/snakeyaml
+Used for parsing SKILL.md YAML frontmatter.

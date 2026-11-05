@@ -1,0 +1,7 @@
+id=after-add
+name=after-add
+version=1.0
+author=Easylsp contributors
+description=Original Easylsp demo plugin
+apiVersion=1
+entry=main.java

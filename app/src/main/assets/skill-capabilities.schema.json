@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Easylsp Skill capabilities v1",
+  "description": "Easylsp-specific tool suggestions accompanying SKILL.md; neither a permission grant nor a capability ceiling. Tools are usable without a Skill.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "scopes", "toolGroups", "optionalToolGroups"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "scopes": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"enum": ["GLOBAL", "PROJECT"]}
+    },
+    "toolGroups": {"$ref": "#/$defs/groups"},
+    "optionalToolGroups": {"$ref": "#/$defs/groups"}
+  },
+  "$defs": {
+    "groups": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$"}
+    }
+  }
+}

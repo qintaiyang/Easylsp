@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "scopes": [
+    "GLOBAL",
+    "PROJECT"
+  ],
+  "toolGroups": [
+    "workspace.files",
+    "workspace.execution"
+  ],
+  "optionalToolGroups": [
+    "network.fetch",
+    "skills.execution",
+    "environment.setup"
+  ]
+}

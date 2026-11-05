@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "scopes": [
+    "GLOBAL",
+    "PROJECT"
+  ],
+  "toolGroups": [
+    "config.mcp",
+    "extensions"
+  ],
+  "optionalToolGroups": [
+    "workspace.execution",
+    "environment.setup"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "scopes": [
+    "PROJECT"
+  ],
+  "toolGroups": [
+    "project.analysis"
+  ],
+  "optionalToolGroups": [
+    "project.native-analysis"
+  ]
+}
