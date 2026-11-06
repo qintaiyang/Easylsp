@@ -5,15 +5,18 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
-@Entity(tableName = "projects", indices = [Index(value = ["packageName", "kind"], unique = true)])
-data class ProjectEntity(@PrimaryKey val id: String, val packageName: String, val name: String, val version: String, @ColumnInfo(defaultValue = "'INSTALLED'") val kind: String = "INSTALLED", @ColumnInfo(defaultValue = "0") val sampleRevision: Long = 0, @ColumnInfo(defaultValue = "0") val lastOpenedAt: Long = 0, @ColumnInfo(defaultValue = "''") val groupName: String = "")
+@Entity(tableName = "projects", indices = [Index(value = ["packageName", "kind", "userId"], unique = true)])
+data class ProjectEntity(@PrimaryKey val id: String, val packageName: String, val name: String, val version: String, @ColumnInfo(defaultValue = "'INSTALLED'") val kind: String = "INSTALLED", @ColumnInfo(defaultValue = "0") val sampleRevision: Long = 0, @ColumnInfo(defaultValue = "0") val lastOpenedAt: Long = 0, @ColumnInfo(defaultValue = "''") val groupName: String = "", @ColumnInfo(defaultValue = "0") val archived: Boolean = false, @ColumnInfo(defaultValue = "'LIBXPOSED'") val nativeBackend: String = "LIBXPOSED", @ColumnInfo(defaultValue = "'NATIVE_AND_JAVA'") val nativePolicy: String = "NATIVE_AND_JAVA", @ColumnInfo(defaultValue = "0") val userId: Int = 0)
 @Entity(tableName = "plugins", foreignKeys = [ForeignKey(entity = ProjectEntity::class, parentColumns = ["id"], childColumns = ["projectId"], onDelete = ForeignKey.CASCADE)], indices = [Index("projectId")])
-data class PluginEntity(@PrimaryKey val id: String, val projectId: String, val name: String, val version: String = "1.0", val author: String = "", val description: String = "", val desiredEnabled: Boolean = false, val revision: Long = 1, @ColumnInfo(defaultValue = "''") val processName: String = "", @ColumnInfo(defaultValue = "'exact'") val processScope: String = "exact", @ColumnInfo(defaultValue = "'BEANSHELL'") val runtime: String = "BEANSHELL", @ColumnInfo(defaultValue = "'main.java'") val entry: String = "main.java")
+data class PluginEntity(@PrimaryKey val id: String, val projectId: String, val name: String, val version: String = "1.0", val author: String = "", val description: String = "", val desiredEnabled: Boolean = false, val revision: Long = 1, @ColumnInfo(defaultValue = "''") val processName: String = "", @ColumnInfo(defaultValue = "'exact'") val processScope: String = "exact", @ColumnInfo(defaultValue = "'BEANSHELL'") val runtime: String = "BEANSHELL", @ColumnInfo(defaultValue = "'main.java'") val entry: String = "main.java", @ColumnInfo(defaultValue = "'LOCAL'") val source: String = "LOCAL",
+    val catalogPluginId: String? = null, val publisherId: String? = null, val releaseId: String? = null, val marketVersionCode: Long? = null,
+    @ColumnInfo(defaultValue = "'{}'") val configJson: String = "{}", @ColumnInfo(defaultValue = "'{}'") val configSchema: String = "{}",
+    @ColumnInfo(defaultValue = "0") val localModified: Boolean = false, @ColumnInfo(defaultValue = "'{}'") val releaseManifest: String = "{}", @ColumnInfo(defaultValue = "'official'") val marketSourceId: String = "official", @ColumnInfo(defaultValue = "'app'") val nativeProcessType: String = "app")
 @Entity(tableName = "native_builds", indices = [Index("pluginId"), Index("projectId")])
 data class NativeBuildEntity(@PrimaryKey val buildId: String, val pluginId: String, val projectId: String,
     val sourceRevision: Long, val sampleRevision: Long, val sdkVersion: String, val toolchainVersion: String,
-    val abi: String = "arm64-v8a", val minApi: Int = 34, val state: String = "BUILDING", val artifactPath: String = "",
-    val executionId: String = "", val createdAt: Long = System.currentTimeMillis(), val error: String = "")
+    val abi: String = "arm64-v8a", val minApi: Int = 31, val state: String = "BUILDING", val artifactPath: String = "",
+    val executionId: String = "", val createdAt: Long = System.currentTimeMillis(), val error: String = "", val releaseId: String? = null, @ColumnInfo(defaultValue = "'LOCAL_BUILD'") val source: String = "LOCAL_BUILD")
 @Entity(tableName = "native_deployments", indices = [Index("projectId")])
 data class NativeDeploymentEntity(@PrimaryKey val generation: String, val projectId: String, val uid: Int,
     val packageName: String, val targetVersion: Long, val policy: String, val snapshot: String,
@@ -28,6 +31,8 @@ data class NativeDeploymentEntity(@PrimaryKey val generation: String, val projec
     @Query("SELECT * FROM native_deployments WHERE projectId = :projectId AND state = 'PUBLISHED' ORDER BY createdAt DESC LIMIT 1") fun published(projectId: String): NativeDeploymentEntity?
     @Query("SELECT * FROM native_deployments WHERE projectId = :projectId ORDER BY createdAt DESC") fun deployments(projectId: String): List<NativeDeploymentEntity>
     @Query("SELECT * FROM native_deployments ORDER BY createdAt DESC") fun observeDeployments(): Flow<List<NativeDeploymentEntity>>
+    @Query("DELETE FROM native_builds WHERE projectId = :projectId") fun deleteProjectBuilds(projectId: String)
+    @Query("DELETE FROM native_deployments WHERE projectId = :projectId") fun deleteProjectDeployments(projectId: String)
     @Query("DELETE FROM native_builds WHERE pluginId = :id") fun deleteBuilds(id: String)
 }
 @Entity(tableName = "samples", primaryKeys = ["projectId", "revision"])
@@ -85,7 +90,7 @@ data class PlanItemEntity(@PrimaryKey val id: String, val conversationId: String
     @Query("SELECT * FROM projects ORDER BY name") fun snapshotProjects(): List<ProjectEntity>
     @Query("SELECT * FROM projects ORDER BY name") fun observeProjects(): Flow<List<ProjectEntity>>
     @Query("SELECT * FROM plugins ORDER BY name") fun observePlugins(): Flow<List<PluginEntity>>
-    @Query("SELECT * FROM projects WHERE packageName = :packageName AND kind = 'INSTALLED'") fun projectByPackage(packageName: String): ProjectEntity?
+    @Query("SELECT * FROM projects WHERE packageName = :packageName AND kind = 'INSTALLED' AND userId = :userId") fun projectByPackage(packageName: String, userId: Int = 0): ProjectEntity?
     @Query("UPDATE projects SET lastOpenedAt = :time WHERE id = :id") fun visit(id: String, time: Long)
     @Query("SELECT * FROM projects WHERE id = :id") fun project(id: String): ProjectEntity?
     @Query("SELECT * FROM plugins WHERE id = :id") fun plugin(id: String): PluginEntity?
@@ -94,6 +99,8 @@ data class PlanItemEntity(@PrimaryKey val id: String, val conversationId: String
     @Update fun updateProject(project: ProjectEntity)
     @Insert fun insertPlugin(plugin: PluginEntity)
     @Update fun updatePlugin(plugin: PluginEntity)
+    @Query("DELETE FROM projects WHERE id = :id") fun deleteProject(id: String)
+    @Query("UPDATE projects SET archived = :archived WHERE id = :id") fun archiveProject(id: String, archived: Boolean)
     @Query("DELETE FROM plugins WHERE id = :id") fun deletePlugin(id: String)
     @Insert fun insertSample(sample: SampleEntity)
     @Query("SELECT * FROM samples WHERE projectId = :projectId AND revision = :revision") fun sample(projectId: String, revision: Long): SampleEntity?
@@ -102,6 +109,7 @@ data class PlanItemEntity(@PrimaryKey val id: String, val conversationId: String
     @Query("DELETE FROM samples WHERE projectId = :projectId") fun deleteSamples(projectId: String)
 }
 @Dao interface WorkflowDao {
+    @Query("SELECT * FROM chat_interactions WHERE status = 'PENDING'") fun observePendingInteractions(): Flow<List<ChatInteractionEntity>>
     @Query("SELECT * FROM providers ORDER BY name") fun providers(): List<ProviderEntity>
     @Query("SELECT * FROM provider_models ORDER BY displayName") fun models(): List<ProviderModelEntity>
     @Query("SELECT * FROM provider_models ORDER BY displayName") fun observeModels(): Flow<List<ProviderModelEntity>>
@@ -164,6 +172,10 @@ data class PlanItemEntity(@PrimaryKey val id: String, val conversationId: String
     @Query("UPDATE conversations SET providerId = :providerId, model = :model WHERE id = :id") fun selectModel(id: String, providerId: String, model: String)
     @Query("UPDATE conversations SET title = :title, updatedAt = :time WHERE id = :id") fun renameConversation(id: String, title: String, time: Long)
     @Query("UPDATE conversations SET updatedAt = :time WHERE id = :id") fun touchConversation(id: String, time: Long)
+    @Query("UPDATE conversations SET archived = :archived WHERE id = :id") fun archiveConversation(id: String, archived: Boolean)
+    @Query("UPDATE conversations SET parentConversationId = NULL WHERE parentConversationId = :id") fun detachForks(id: String)
+    @Query("UPDATE harness_sessions SET sourceConversationId = NULL WHERE sourceConversationId = :id") fun detachSources(id: String)
+    @Query("DELETE FROM conversations WHERE id = :id") fun removeConversation(id: String)
     @Query("DELETE FROM conversations WHERE id = :id AND projectId IS NULL") fun deleteGlobalConversation(id: String)
     @Query("DELETE FROM conversations WHERE id = :id AND projectId = :projectId") fun deleteConversation(projectId: String, id: String)
     @Query("DELETE FROM messages WHERE conversationId = :id") fun deleteMessages(id: String)
@@ -229,13 +241,48 @@ data class PlanItemEntity(@PrimaryKey val id: String, val conversationId: String
     @Upsert fun savePlanItem(item: PlanItemEntity)
     @Query("DELETE FROM plan_items WHERE conversationId = :conversationId") fun clearPlan(conversationId: String)
 }
-@Database(entities = [ProjectEntity::class, PluginEntity::class, SampleEntity::class, ProviderEntity::class, ProviderModelEntity::class, MemoryEntity::class, ConversationEntity::class, MessageEntity::class, ToolRunEntity::class, McpServerEntity::class, ToolPluginEntity::class, SkillEntity::class, PlanItemEntity::class, PromptEntity::class, ChatTurnEntity::class, ChatDraftEntity::class, ChatInputEntity::class, ChatInteractionEntity::class, ChatReadingEntity::class, HarnessSessionEntity::class, DiagnosticEntity::class, NativeBuildEntity::class, NativeDeploymentEntity::class, ChatBranchEntity::class, ChatUsageEntity::class], version = 13, exportSchema = true)
+@Database(entities = [ProjectEntity::class, PluginEntity::class, SampleEntity::class, ProviderEntity::class, ProviderModelEntity::class, MemoryEntity::class, ConversationEntity::class, MessageEntity::class, ToolRunEntity::class, McpServerEntity::class, ToolPluginEntity::class, SkillEntity::class, PlanItemEntity::class, PromptEntity::class, ChatTurnEntity::class, ChatDraftEntity::class, ChatInputEntity::class, ChatInteractionEntity::class, ChatReadingEntity::class, HarnessSessionEntity::class, DiagnosticEntity::class, NativeBuildEntity::class, NativeDeploymentEntity::class, ChatBranchEntity::class, ChatUsageEntity::class], version = 17, exportSchema = true)
 abstract class EasylspDatabase : RoomDatabase() {
     abstract fun nativePlugins(): NativePluginDao
     abstract fun diagnostics(): DiagnosticDao
     abstract fun projects(): ProjectDao
     abstract fun workflows(): WorkflowDao
     companion object {
+        val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE projects ADD COLUMN userId INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("DROP INDEX index_projects_packageName_kind")
+                db.execSQL("CREATE UNIQUE INDEX index_projects_packageName_kind_userId ON projects(packageName,kind,userId)")
+                db.execSQL("ALTER TABLE plugins ADD COLUMN marketSourceId TEXT NOT NULL DEFAULT 'official'")
+                db.execSQL("ALTER TABLE plugins ADD COLUMN nativeProcessType TEXT NOT NULL DEFAULT 'app'")
+            }
+        }
+        val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE projects ADD COLUMN nativeBackend TEXT NOT NULL DEFAULT 'LIBXPOSED'")
+                db.execSQL("ALTER TABLE projects ADD COLUMN nativePolicy TEXT NOT NULL DEFAULT 'NATIVE_AND_JAVA'")
+            }
+        }
+        val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE plugins ADD COLUMN source TEXT NOT NULL DEFAULT 'LOCAL'")
+                db.execSQL("ALTER TABLE plugins ADD COLUMN catalogPluginId TEXT")
+                db.execSQL("ALTER TABLE plugins ADD COLUMN publisherId TEXT")
+                db.execSQL("ALTER TABLE plugins ADD COLUMN releaseId TEXT")
+                db.execSQL("ALTER TABLE plugins ADD COLUMN marketVersionCode INTEGER")
+                db.execSQL("ALTER TABLE plugins ADD COLUMN configJson TEXT NOT NULL DEFAULT '{}'")
+                db.execSQL("ALTER TABLE plugins ADD COLUMN configSchema TEXT NOT NULL DEFAULT '{}'")
+                db.execSQL("ALTER TABLE plugins ADD COLUMN localModified INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE plugins ADD COLUMN releaseManifest TEXT NOT NULL DEFAULT '{}'")
+                db.execSQL("ALTER TABLE native_builds ADD COLUMN releaseId TEXT")
+                db.execSQL("ALTER TABLE native_builds ADD COLUMN source TEXT NOT NULL DEFAULT 'LOCAL_BUILD'")
+            }
+        }
+        val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE projects ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
+            }
+        }
         val MIGRATION_12_13 = object : Migration(12, 13) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE providers ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1")

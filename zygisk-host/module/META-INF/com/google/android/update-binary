@@ -1,0 +1,12 @@
+#!/sbin/sh
+#MAGISK
+umask 022
+OUTFD=$2
+ZIPFILE=$3
+if [ ! -f /data/adb/magisk/util_functions.sh ]; then
+  echo "Easylsp: install this module through a compatible root manager."
+  exit 1
+fi
+. /data/adb/magisk/util_functions.sh
+install_module
+exit 0

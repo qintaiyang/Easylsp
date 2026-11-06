@@ -13,3 +13,11 @@ local.properties
 .env
 .env.*
 /references/
+
+# Local development records and private delivery tooling.
+/docs/
+/AGENTS.md
+/scripts/package-native-ready.py
+/market/OPERATIONS.md
+*.log
+*.jsonl

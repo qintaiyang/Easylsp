@@ -51,6 +51,7 @@ fun runtimeLabel(state: String?): String = when (state) {
                         StatusBadge(if (host == null) "目标离线" else runtimeLabel(instance?.state), instance?.state == "RUNNING", instance?.state in listOf("FAILED", "ERROR"))
                         if (instance?.state == "RUNNING" && plugin.revision != instance.revision) StatusBadge("待重载")
                     }
+                    PluginReleaseActions(vm, project, plugin)
                     Row {
                         TextButton(onClick = { edit(plugin.id) }) { Text("编辑") }
                         TextButton(onClick = { logs(plugin.id) }) { Text("日志") }

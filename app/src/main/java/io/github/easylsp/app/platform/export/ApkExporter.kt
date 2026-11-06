@@ -73,7 +73,7 @@ class ApkExporter(private val graph: EasylspApp) {
         try {
             graph.assets.open("standalone-template.apk").use { input -> template.outputStream().use { input.copyTo(it) } }
             packageApk(template, unsigned, plugin, project.packageName, graph.store.read(pluginId), graph.store.libraries(plugin).associate { it.name to it.readBytes() })
-            ApkSigner.Builder(listOf(signer())).setInputApk(unsigned).setOutputApk(signed).setMinSdkVersion(34)
+            ApkSigner.Builder(listOf(signer())).setInputApk(unsigned).setOutputApk(signed).setMinSdkVersion(31)
                 .setV1SigningEnabled(false).setV2SigningEnabled(true).setV3SigningEnabled(false).setV4SigningEnabled(false).build().sign()
             signed
         } finally { unsigned.delete(); template.delete() }

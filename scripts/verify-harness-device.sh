@@ -3,7 +3,7 @@ set -euo pipefail
 
 # All mount commands live in a script executed *after* the native namespace entry.
 # Do not inline them into nested adb / su / sh -c command strings.
-serial="${1:-127.0.0.1:15555}"
+serial="${1:?Usage: $0 DEVICE_SERIAL}"
 repository=$(cd "$(dirname "$0")/.." && pwd)
 staging=$(mktemp -d /tmp/easylsp-harness-device.XXXXXX)
 trap 'rm -rf "$staging"' EXIT

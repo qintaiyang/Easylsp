@@ -51,6 +51,26 @@ import kotlinx.coroutines.withContext
                 ListItem(headlineContent = { Text("紧凑底栏") }, trailingContent = { Switch(compact, { scope.launch { vm.graph.settings.compactNavigation(it) } }) })
             }
             "environment" -> {
+                RuntimeEnvironmentCards(vm)
+                val exporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+                    if (uri != null) vm.action { withContext(Dispatchers.IO) {
+                        vm.graph.assets.open("easylsp-native-host.zip").use { input -> requireNotNull(vm.graph.contentResolver.openOutputStream(uri)).use { output -> input.copyTo(output) } }
+                    }; "宿主 ZIP 已导出，请在当前 root 管理器安装，随后重启手机" }
+                }
+                AppCard {
+                    TextButton(onClick = { vm.action { "已清理 ${vm.graph.store.clearUnusedReleaseCache()} 个未安装的缓存发行；回退时需要重新下载" } }) { Text("清理未安装的发行缓存") }
+                    Text("Native 宿主与存储", style = MaterialTheme.typography.titleMedium)
+                    Text("宿主安装／升级后重启手机；插件版本和配置发布只需重启目标。宿主独立数据保存在 /data/adb/easylsp。")
+                    TextButton(onClick = { exporter.launch("easylsp-native-host-0.9-dev1.zip") }) { Text("导出内置宿主安装 ZIP") }
+                    TextButton(onClick = { vm.action {
+                        val intent = listOf("com.sukisu.ultra", "me.weishu.kernelsu", "com.topjohnwu.magisk", "me.bmax.apatch").firstNotNullOfOrNull { vm.graph.packageManager.getLaunchIntentForPackage(it) }
+                        requireNotNull(intent) { "请打开当前 root 管理器，导入刚导出的 ZIP" }
+                        vm.graph.startActivity(intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)); "已打开 root 管理器"
+                    } }) { Text("打开 root 管理器") }
+                    TextButton(onClick = { vm.action { withContext(Dispatchers.IO) { vm.graph.nativeHost.call("list-artifacts") }.toString() } }) { Text("查询宿主产物与回退引用") }
+                    TextButton(onClick = { vm.action { withContext(Dispatchers.IO) { vm.graph.nativeHost.call("prune-history"); vm.graph.nativeHost.call("gc") }.toString() } }) { Text("移除旧宿主回退记录并清理孤立产物") }
+                    Text("清理保留当前发布；已装载代码仍保留到目标进程退出。共享发行缓存可在插件中选择固定版本回退。", style = MaterialTheme.typography.bodySmall)
+                }
                 AppCard {
                     Text("手机操作", style = MaterialTheme.typography.titleMedium)
                     Text("开启无障碍服务后，AI 可按会话授权观察和操作手机。")
@@ -82,6 +102,7 @@ import kotlinx.coroutines.withContext
                 }
                 val harness = vm.graph.harness
                 BackgroundPermissionsCard(vm.graph)
+                ManagerKeepaliveCard(vm)
                 val harnessStatus by harness.status.collectAsStateWithLifecycle()
                 val serviceStatus by harness.serviceStatus.collectAsStateWithLifecycle()
                 val harnessBusy by harness.busy.collectAsStateWithLifecycle()
@@ -96,7 +117,10 @@ import kotlinx.coroutines.withContext
                     if (harnessBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
                     Row(Modifier.horizontalScroll(rememberScrollState())) {
                         TextButton(enabled = vm.graph.linux.installed && !harnessBusy, onClick = { vm.action { harness.install(); "Harness 已安装" } }) { Text("安装 / 更新") }
-                        TextButton(enabled = harness.installed && !harnessBusy, onClick = { notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS) }) { Text("启动") }
+                        TextButton(enabled = harness.installed && !harnessBusy, onClick = {
+                            if (android.os.Build.VERSION.SDK_INT >= 33) notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                            else vm.action { io.github.easylsp.app.platform.harness.HarnessExecutionService.start(vm.graph); "正在连接会话宿主" }
+                        }) { Text("启动") }
                         TextButton(enabled = !harnessBusy, onClick = { vm.action { harness.refresh(); harness.status.value } }) { Text("刷新状态") }
                         TextButton(enabled = !harnessBusy, onClick = { vm.action { harness.stop(); vm.graph.stopService(android.content.Intent(vm.graph, io.github.easylsp.app.platform.harness.HarnessExecutionService::class.java)); "宿主已停止" } }) { Text("停止") }
                     }
@@ -107,7 +131,13 @@ import kotlinx.coroutines.withContext
             else -> {
                 AppCard {
                     Text("Easylsp ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.titleLarge)
-                    Text("开源 Android 插件调试工具\nAndroid 14+ · arm64-v8a · libxposed API 101+")
+                    Text("开源 Android 插件调试工具\nAndroid 12+ · arm64-v8a · libxposed API 101+")
+                    androidx.compose.foundation.text.selection.SelectionContainer { Text(io.github.easylsp.app.platform.AppLinks.SOURCE) }
+                    TextButton(onClick = { vm.action {
+                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(io.github.easylsp.app.platform.AppLinks.SOURCE)).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        try { vm.graph.startActivity(intent); "" }
+                        catch (error: android.content.ActivityNotFoundException) { "没有可打开链接的浏览器，请复制上方地址" }
+                    } }) { Text("GitHub 开源仓库") }
                     TextButton(onClick = { vm.action {
                         val text = withContext(Dispatchers.IO) {
                             fun read(path: String): String = requireNotNull(vm.graph.assets.list(path)).joinToString("\n\n") { name ->

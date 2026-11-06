@@ -1,5 +1,6 @@
 package io.github.easylsp.app.feature.chat
 
+import io.github.easylsp.app.util.readUpTo
 import android.app.Activity
 import android.content.Intent
 import android.speech.RecognizerIntent
@@ -33,7 +34,7 @@ import org.json.*
             val provider = withContext(Dispatchers.IO) { graph.models.resolve(graph.models.selected(conversation)) }
             val parts = withContext(Dispatchers.IO) { uris.map { uri ->
                 val mime = graph.contentResolver.getType(uri) ?: "text/plain"
-                val bytes = requireNotNull(graph.contentResolver.openInputStream(uri)).use { stream -> stream.readNBytes(5 * 1024 * 1024 + 1) }
+                val bytes = requireNotNull(graph.contentResolver.openInputStream(uri)).use { stream -> stream.readUpTo(5 * 1024 * 1024 + 1) }
                 require(bytes.size <= 5 * 1024 * 1024) { "单个附件最多 5 MiB" }
                 if (mime.startsWith("image/")) {
                     require(JSONObject(provider.options).optBoolean("supportsImages")) { "请在模型高级参数中确认此模型支持图片" }

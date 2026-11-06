@@ -35,17 +35,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     } }
     fun rename(id: String, name: String) { viewModelScope.launch(Dispatchers.IO) { graph.store.workflows.renameConversation(id, name.trim(), System.currentTimeMillis()) } }
     fun delete(projectId: String, id: String) { viewModelScope.launch(Dispatchers.IO) {
-        check(graph.chat.activeConversation.value != id)
-        graph.store.transaction {
-            require(graph.store.workflows.conversation(id)?.projectId == projectId)
-            graph.store.workflows.branchHistory(id).forEach { branch ->
-                graph.store.workflows.deleteMessages(branch.id); graph.store.workflows.deleteToolRuns(branch.id)
-                graph.store.workflows.deleteTurns(branch.id); graph.store.workflows.deleteInteractions(branch.id); graph.store.workflows.clearPlan(branch.id)
-            }
-            graph.store.workflows.deleteBranches(id); graph.store.workflows.deleteUsage(id)
-            graph.store.workflows.deleteMessages(id); graph.store.workflows.deleteToolRuns(id); graph.store.workflows.clearPlan(id); graph.store.workflows.deleteTurns(id); graph.store.workflows.deleteDraft(id); graph.store.workflows.deleteConversation(projectId, id)
-            graph.store.workflows.deleteInputs(id); graph.store.workflows.deleteInteractions(id); graph.store.workflows.deleteReading(id)
-        }
+        try { require(graph.store.workflows.conversation(id)?.projectId == projectId); graph.localManagement.deleteConversation(id) }
+        catch (failure: Exception) { error.value = failure.message ?: failure.toString() }
     } }
     fun send(id: String, text: String, sessionId: String?, allow: Boolean, attachments: JSONArray = JSONArray(), accepted: () -> Unit = {}, rejected: () -> Unit = {}, intent: String = "NEW_TASK", editedMessageId: Long? = null, branchId: String? = null) {
         viewModelScope.launch {
@@ -54,15 +45,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     fun saveDraft(id: String, text: String, attachments: List<JSONObject>, editedMessageId: Long? = null, branchId: String? = null) {
-        viewModelScope.launch(Dispatchers.IO) { graph.store.workflows.saveDraft(ChatDraftEntity(id, text, JSONArray(attachments).toString(), editedMessageId, branchId)) }
+        viewModelScope.launch(Dispatchers.IO) { graph.store.transaction { if (graph.store.workflows.conversation(id) != null) graph.store.workflows.saveDraft(ChatDraftEntity(id, text, JSONArray(attachments).toString(), editedMessageId, branchId)) } }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable fun ChatScreen(project: ProjectEntity, sessionId: String?, vm: ChatViewModel = viewModel(), open: (String) -> Unit = {}) {
     val dao = vm.graph.store.workflows
     val providers by remember { vm.graph.models.available() }.collectAsStateWithLifecycle(emptyList())
     val loadedConversations by remember(project.id) { dao.conversations(project.id) }.collectAsStateWithLifecycle<List<ConversationEntity>?>(null)
-    val conversations = loadedConversations.orEmpty()
+    var archived by rememberSaveable(project.id) { mutableStateOf(false) }
+    val conversations = loadedConversations.orEmpty().filter { it.archived == archived && it.parentConversationId == null }
+    val managementError by vm.error.collectAsStateWithLifecycle()
     val active by vm.graph.chat.activeConversation.collectAsStateWithLifecycle()
     var configureModel by remember { mutableStateOf(false) }
     var sampleStatus by remember { mutableStateOf("") }
@@ -88,6 +82,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     var name by rememberSaveable { mutableStateOf("") }
     var deleteId by rememberSaveable { mutableStateOf<String?>(null) }
     Column(Modifier.fillMaxSize()) {
+        FilterChip(archived, { archived = !archived }, label = { Text("已归档") }, modifier = Modifier.padding(horizontal = 16.dp))
+        if (managementError.isNotEmpty()) Text(managementError, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp))
         Row(Modifier.padding(horizontal = 16.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             providers.forEach { provider -> FilterChip((providerId ?: providers.firstOrNull()?.id) == provider.id, { providerId = provider.id }, label = { Text(provider.name) }) }
         }
@@ -103,19 +99,24 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         else if (conversations.isEmpty()) EmptyState("开始项目对话", "会话固定样本版本，每轮发送时绑定所选目标进程。")
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             items(conversations, key = { it.id }) { item -> AppCard {
-                Column(Modifier.fillMaxWidth().clickable { open(item.id) }) {
+                Column(Modifier.fillMaxWidth().combinedClickable(onClick = { open(item.id) }, onLongClick = { renameId = item.id; name = item.title })) {
                     Text(item.title, style = MaterialTheme.typography.titleMedium)
                     Text("${item.model} · 样本 r${item.sampleRevision}", style = MaterialTheme.typography.bodySmall)
                     Text(SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date(item.updatedAt)), style = MaterialTheme.typography.labelSmall)
                 }
-                Row { TextButton(onClick = { renameId = item.id; name = item.title }) { Text("重命名") }; TextButton(enabled = active != item.id, onClick = { deleteId = item.id }) { Text("删除") }; if (active == item.id) StatusBadge("正在响应", true) }
+                Row { TextButton(onClick = { renameId = item.id; name = item.title }) { Text("重命名") }; TextButton(onClick = { deleteId = item.id }) { Text("删除") }; if (active == item.id) StatusBadge("正在响应", true) }
             } }
         }
     }
     val newProvider = remember(configureModel) { ProviderEntity(UUID.randomUUID().toString(), "OpenAI", "openai", "", "", maxSteps = 0, timeoutSeconds = 300) }
     if (configureModel) ProviderEditor(androidx.lifecycle.viewmodel.compose.viewModel(), newProvider) { configureModel = false }
-    if (renameId != null) AlertDialog(onDismissRequest = { renameId = null }, title = { Text("会话名称") }, text = { OutlinedTextField(name, { name = it }) }, confirmButton = { TextButton(enabled = name.isNotBlank(), onClick = { vm.rename(requireNotNull(renameId), name); renameId = null }) { Text("保存") } })
-    if (deleteId != null) AlertDialog(onDismissRequest = { deleteId = null }, title = { Text("删除此会话？") }, text = { Text("同时删除它的消息、工具记录与计划项。") }, confirmButton = { TextButton(onClick = { vm.delete(project.id, requireNotNull(deleteId)); deleteId = null }) { Text("删除") } }, dismissButton = { TextButton(onClick = { deleteId = null }) { Text("取消") } })
+    if (renameId != null) AlertDialog(onDismissRequest = { renameId = null }, title = { Text("管理会话") }, text = { Column {
+        OutlinedTextField(name, { name = it })
+        TextButton(onClick = { val id = requireNotNull(renameId); scope.launch(Dispatchers.IO) { dao.archiveConversation(id, !archived) }; renameId = null }) { Text(if (archived) "取消归档" else "归档") }
+        TextButton(onClick = { deleteId = renameId; renameId = null }) { Text("删除…") }
+    } }, confirmButton = { TextButton(enabled = name.isNotBlank(), onClick = { vm.rename(requireNotNull(renameId), name); renameId = null }) { Text("保存") } }, dismissButton = { TextButton(onClick = { renameId = null }) { Text("关闭") } })
+    if (deleteId != null) AlertDialog(onDismissRequest = { deleteId = null }, title = { Text("删除此会话？") }, text = { Text("将停止此会话及执行子任务，删除消息、工具记录、草稿、计划与独占附件；保留项目和共享工作目录。") }, confirmButton = { TextButton(onClick = { vm.delete(project.id, requireNotNull(deleteId)); deleteId = null }) { Text("停止并删除") } }, dismissButton = { TextButton(onClick = { deleteId = null }) { Text("取消") } })
+
 }
 
 fun usageLabel(raw: String): String {

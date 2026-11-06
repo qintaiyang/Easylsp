@@ -12,6 +12,7 @@ import io.github.easylsp.app.platform.tools.BoundToolCatalog
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
@@ -39,6 +40,43 @@ class HarnessExecutionService : Service() {
     private val bindings = java.util.concurrent.ConcurrentHashMap<String, Binding>()
     private val openings = Mutex()
     private var bubble: ExecutionBubble? = null
+    private var notificationRefresh: Job? = null
+    private var lastNotification: TaskNotification? = null
+    private fun notifyTasks(value: TaskNotification) {
+        if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) return
+        if (value == lastNotification) return
+        lastNotification = value
+        val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP).putExtra("route", value.route), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val stop = PendingIntent.getService(this, 1, Intent(this, HarnessExecutionService::class.java).setAction("STOP"), PendingIntent.FLAG_IMMUTABLE)
+        val notification = Notification.Builder(this, CHANNEL).setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setContentTitle("Easylsp AI 任务").setContentText(value.text).setContentIntent(open).setOngoing(true)
+            .addAction(Notification.Action.Builder(null, "停止执行服务", stop).build()).build()
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION, notification)
+    }
+    private fun refreshTaskNotification() {
+        notificationRefresh?.cancel()
+        notificationRefresh = scope.launch {
+            delay(150)
+            try {
+                val rows = request("host/sessions").getJSONArray("sessions")
+                val all = graph.store.workflows.allConversations().associateBy { it.id }
+                val conversations = all.values.associateBy { graph.store.workflows.harnessSession(it.id)?.sessionId }
+                fun owner(id: String): String {
+                    val parent = all[id]?.parentConversationId ?: return id
+                    return owner(parent)
+                }
+                val activities = (0 until rows.length()).map { index ->
+                    val row = rows.getJSONObject(index)
+                    val conversation = conversations[row.getString("sessionId")]
+                    TaskActivity(conversation?.id, row.getString("status"), (row.optJSONArray("interactions")?.length() ?: 0) > 0 ||
+                        conversation?.let { graph.store.workflows.interactionHistory(it.id).any { interaction -> interaction.status == "PENDING" } } == true,
+                        conversation?.id?.let(::owner), row.optString("activity") == "maintenance" || conversation?.task == "__memory_consolidation__")
+                }
+                notifyTasks(taskNotification(true, activities))
+            } catch (error: CancellationException) { throw error }
+            catch (error: Exception) { notifyTasks(taskNotification(false, emptyList())) }
+        }
+    }
     var disconnected = false
         private set
     val ended = CompletableDeferred<Unit>()
@@ -46,13 +84,15 @@ class HarnessExecutionService : Service() {
         super.onCreate()
         val notifications = getSystemService(NotificationManager::class.java)
         notifications.createNotificationChannel(NotificationChannel(CHANNEL, "AI 开发任务", NotificationManager.IMPORTANCE_LOW))
-        val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java).putExtra("route", "conversations"), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP).putExtra("route", "conversations"), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val stop = PendingIntent.getService(this, 1, Intent(this, HarnessExecutionService::class.java).setAction("STOP"), PendingIntent.FLAG_IMMUTABLE)
         val notification = Notification.Builder(this, CHANNEL).setSmallIcon(android.R.drawable.stat_notify_sync)
-            .setContentTitle("Easylsp 开发任务").setContentText("会话宿主与设备工具已连接，离开页面后可继续任务")
-            .setContentIntent(open).setOngoing(true).addAction(Notification.Action.Builder(null, "停止", stop).build()).build()
-        startForeground(NOTIFICATION, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            .setContentTitle("Easylsp 开发任务").setContentText("正在连接执行服务…")
+            .setContentIntent(open).setOngoing(true).addAction(Notification.Action.Builder(null, "停止执行服务", stop).build()).build()
+        if (android.os.Build.VERSION.SDK_INT >= 34) startForeground(NOTIFICATION, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        else startForeground(NOTIFICATION, notification)
         showBubble()
+        scope.launch { graph.store.workflows.observePendingInteractions().collect { refreshTaskNotification() } }
         scope.launch {
             try {
                 graph.harness.start()
@@ -68,7 +108,11 @@ class HarnessExecutionService : Service() {
         showBubble()
         if (intent?.action == "STOP") scope.launch {
             try { graph.harness.stop() }
-            finally { stopSelf() }
+            finally {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                ended.complete(Unit) // Release bound clients before Android can destroy this service.
+                stopSelf()
+            }
         }
         return START_NOT_STICKY
     }
@@ -90,6 +134,7 @@ class HarnessExecutionService : Service() {
             val concurrency = graph.getSharedPreferences("harness-settings", 0).getInt("concurrency", 0)
             if (concurrency > 0) client.request("host/configure", JSONObject().put("concurrency", concurrency))
             graph.harness.serviceStatus.value = "执行服务已连接"
+            refreshTaskNotification()
             reader = scope.launch {
                 try {
                     for (frame in client.notifications) {
@@ -100,16 +145,24 @@ class HarnessExecutionService : Service() {
                         if (frame.optString("method") == "session.admission-stopped") graph.store.workflows.inputStatus(params!!.getString("requestId"), "STOPPED")
                         if (frame.optString("method") == "session.admitted") graph.chat.admitted(params!!)
                         frames.emit(frame)
+                        if (frame.optString("method") != "session.stream") refreshTaskNotification()
                     }
+                    reportDisconnected("连接已关闭")
                 } catch (error: CancellationException) { throw error }
                 catch (error: Exception) {
                     Log.e("HarnessExecution", "Session projection stopped", error)
-                    disconnected = true
-                    sessionClients.values.forEach { it.disconnected() }
-                    graph.harness.serviceStatus.value = "会话显示已断开：${error.message}；重新连接可补读历史"
+                    reportDisconnected(error.message.orEmpty())
                 }
             }
         } catch (error: Exception) { ready.completeExceptionally(error); throw error }
+    }
+
+    private fun reportDisconnected(detail: String) {
+        notificationRefresh?.cancel()
+        disconnected = true
+        notifyTasks(taskNotification(false, emptyList()))
+        sessionClients.values.forEach { it.disconnected() }
+        graph.harness.serviceStatus.value = "会话显示已断开：$detail；重新连接可补读历史"
     }
 
     internal suspend fun observeConversation(conversationId: String): HarnessSessionClient {
@@ -152,12 +205,31 @@ class HarnessExecutionService : Service() {
             .put("parentSessionId", parentSessionId).put("reconfigure", change)
             .put("config", JSONObject(config.toString()).put("bridgeURL", bridge.url).put("bridgeToken", bridge.token)))
     }
+    internal suspend fun closeConversation(conversationId: String, sessionIds: List<String>) = openings.withLock {
+        val states = request("host/sessions").getJSONArray("sessions")
+        val existing = (0 until states.length()).map { states.getJSONObject(it).getString("sessionId") }.toSet()
+        // Wait for any in-flight projection before closing its engine or removing Room rows.
+        sockets.withLock { sessionClients.remove(conversationId)?.detach() }
+        for (id in sessionIds) {
+            if (id in existing) request("session/close", JSONObject().put("sessionId", id))
+            request("session/remove-history", JSONObject().put("sessionId", id))
+        }
+        sockets.withLock {
+            sessionIds.forEach { id ->
+                bindings.remove(id)?.let { it.bridge.closeAndJoin(); it.tools.forEach { tool -> tool.close() } }
+                File(graph.filesDir, "harness/bridges/$id.json").delete()
+                graph.secrets.delete("harness-bridge:$id")
+            }
+        }
+        refreshTaskNotification()
+    }
     internal fun capabilities(sessionId: String) = bindings[sessionId]?.bridge?.selection()
     override fun onDestroy() {
         bubble?.close()
         sessionClients.keys.forEach { graph.phone.release(it) }
         bindings.values.forEach { it.bridge.close(); it.tools.forEach { tool -> tool.close() } }; bindings.clear()
         connection?.close(); scope.cancel()
+        stopForeground(STOP_FOREGROUND_REMOVE)
         ended.complete(Unit)
         graph.harness.serviceStatus.value = "执行服务已停止"
         super.onDestroy()

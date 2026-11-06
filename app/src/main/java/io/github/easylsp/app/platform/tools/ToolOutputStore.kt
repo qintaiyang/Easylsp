@@ -6,6 +6,7 @@ import java.util.UUID
 
 /** Long results are stored once; Harness keeps the first page and a scoped reference. */
 class ToolOutputStore(private val directory: File) {
+    fun clearConversation(id: String) { File(directory, id).deleteRecursively() }
     fun pageResult(conversationId: String, result: JSONObject): JSONObject {
         val text = result.toString()
         if (text.length <= 12000) return result

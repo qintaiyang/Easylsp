@@ -1,8 +1,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <permission android:name="io.github.easylsp.demo.permission.WORKER_RESULT" android:protectionLevel="signature" />
+    <uses-permission android:name="io.github.easylsp.demo.permission.WORKER_RESULT" />
     <uses-permission android:name="io.github.easylsp.permission.RECONNECT" />
     <queries><package android:name="io.github.easylsp" /></queries>
     <application android:name=".DemoApplication" android:label="Easylsp Demo" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:allowBackup="false">
         <activity android:name=".DemoActivity" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter></activity>
         <service android:name=".DemoProcessService" android:process=":worker" android:exported="false" />
+        <service android:name=".NativeIsolatedService" android:process=":isolated" android:isolatedProcess="true" android:exported="false" />
+        <service android:name=".NativeAppZygoteService" android:process=":appzygote" android:isolatedProcess="true" android:useAppZygote="true" android:exported="false" />
     </application>
 </manifest>

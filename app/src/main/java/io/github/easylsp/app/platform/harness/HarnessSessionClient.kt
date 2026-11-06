@@ -24,9 +24,16 @@ class HarnessSessionClient(
     val status = state.asStateFlow()
     private var revision = 0L
     private var nextIndex = 0
+    private var detached = false
     private fun params() = JSONObject().put("sessionId", sessionId)
 
-    suspend fun synchronize() = serial.withLock { synchronizeLocked() }
+    suspend fun synchronize() = serial.withLock { if (!detached) synchronizeLocked() }
+
+    internal suspend fun detach() = serial.withLock {
+        detached = true
+        current.value = null
+        state.value = "detached"
+    }
 
     private suspend fun history() {
         val mapping = requireNotNull(dao.harnessSession(conversationId))
@@ -68,6 +75,7 @@ class HarnessSessionClient(
     }
 
     internal suspend fun accept(frame: JSONObject) = serial.withLock {
+        if (detached) return@withLock
         val params = frame.getJSONObject("params")
         if (params.optString("sessionId") != sessionId || dao.harnessSession(conversationId)?.sessionId != sessionId) return@withLock
         when (frame.getString("method")) {

@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 
-def inspect(path):
+def inspect(path, declared_min_api=31):
     data = Path(path).read_bytes()
     def unpack(fmt, offset):
         size = struct.calcsize('<' + fmt)
@@ -54,8 +54,8 @@ def inspect(path):
             if vaddr <= address and address + size <= vaddr + length:
                 return offset + address - vaddr
         raise ValueError('Dynamic address outside file-backed PT_LOAD')
-    if not loads or api != 34:
-        raise ValueError(f'Expected Android min API 34 note; got {api}')
+    if not loads or api != declared_min_api:
+        raise ValueError(f'Expected Android min API {declared_min_api} note; got {api}')
     strsize = dynamic[10][0]
     stroff = file_offset(dynamic[5][0], strsize)
     def string(index):

@@ -121,7 +121,7 @@ import io.noties.markwon.Markwon
         readingLoaded = true
     }
     LaunchedEffect(input, attachments, draftLoaded, editedMessageId, branchId) {
-        if (draftLoaded) { delay(250); withContext(Dispatchers.IO) { dao.saveDraft(ChatDraftEntity(conversationId, input, JSONArray(attachments).toString(), editedMessageId, branchId)) } }
+        if (draftLoaded) { delay(250); withContext(Dispatchers.IO) { graph.store.transaction { if (dao.conversation(conversationId) != null) dao.saveDraft(ChatDraftEntity(conversationId, input, JSONArray(attachments).toString(), editedMessageId, branchId)) } } }
     }
     DisposableEffect(conversationId) { onDispose { vm.saveDraft(conversationId, input, attachments, editedMessageId, branchId) } }
     LaunchedEffect(readingLoaded, timeline.size) {

@@ -1,5 +1,4 @@
 #define _GNU_SOURCE
-#include <jni.h>
 #include <errno.h>
 #include <dlfcn.h>
 #include <link.h>
@@ -15,16 +14,13 @@
 #include <unistd.h>
 #include "shadowhook.h"
 #include "diagnostic_wire.h"
+#include "include/easylsp_native_core.h"
 
 static int channel = -1;
 static pthread_once_t engine_once = PTHREAD_ONCE_INIT;
 static int engine_result;
 static void initialize_engine(void) { engine_result = shadowhook_init(SHADOWHOOK_MODE_UNIQUE, false); }
 int sh_engine_initialize(void) { pthread_once(&engine_once, initialize_engine); return engine_result; }
-JNIEXPORT jint JNICALL Java_io_github_easylsp_nativeengine_NativeRuntime_initializeEngine(JNIEnv *env, jclass type) {
-    (void)env; (void)type;
-    return sh_engine_initialize();
-}
 static _Atomic uint64_t sequence, dropped;
 static uint64_t millis(clockid_t id) { struct timespec t; clock_gettime(id, &t); return (uint64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000; }
 /* No JNI, allocation, stack unwinding or locks in wrappers/linker callbacks. Kernel queue is bounded. */
@@ -79,15 +75,12 @@ static void hook(const char *name, void *proxy, void **previous) {
     emit(SH_PROBE, name, 0, stub == NULL ? (uint64_t)shadowhook_get_errno() : 0, 0, 0);
 }
 
-JNIEXPORT jint JNICALL Java_io_github_easylsp_nativeengine_NativeRuntime_startObservation(JNIEnv *env, jclass type, jstring endpoint) {
-    (void)type;
+int sh_core_start_observation(const char *name) {
     if (channel >= 0) return 0;
-    const char *name = (*env)->GetStringUTFChars(env, endpoint, NULL);
     struct sockaddr_un address = { .sun_family = AF_UNIX };
     size_t length = strlen(name);
-    if (length >= sizeof(address.sun_path) - 1) { (*env)->ReleaseStringUTFChars(env, endpoint, name); return -ENAMETOOLONG; }
+    if (length >= sizeof(address.sun_path) - 1) return -ENAMETOOLONG;
     memcpy(address.sun_path + 1, name, length);
-    (*env)->ReleaseStringUTFChars(env, endpoint, name);
     int fd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
     if (fd < 0) return -errno;
     int buffer_bytes = 1024 * 1024;

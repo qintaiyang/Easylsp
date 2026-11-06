@@ -3,6 +3,7 @@ package io.github.easylsp.app.platform.ai
 import io.github.easylsp.app.EasylspApp
 import io.github.easylsp.app.data.*
 import org.json.*
+import kotlinx.coroutines.CancellationException
 import java.util.UUID
 
 class MemoryService(private val graph: EasylspApp) {
@@ -56,7 +57,9 @@ class MemoryService(private val graph: EasylspApp) {
         dao.saveConversation(child.copy(archived = true, mode = "normal", authorizationMode = "ALLOW"))
         val sources = dao.history(conversation.id).filter { it.role == "user" || it.role == "assistant" }.map { JSONObject().put("messageId", it.id).put("role", it.role).put("engineMessageId", it.engineMessageId) }
         val instruction = "独立整理刚完成任务中的长期记忆。仅保存适合跨会话复用的已确认结论，保留来源；不要保存完整日志、临时进度或重复条目。项目专有事实只保存到项目；全局记忆只保存用户偏好等跨项目事实。不得创建常驻规则。不需要保存时直接结束。来源会话 ${conversation.id}，来源消息如下：\n${JSONArray(sources)}"
-        graph.chat.submit(child.id, instruction, null, conversation.authorizationMode == "ALLOW", JSONArray(), intent = "NEW_TASK").await()
+        val submission = graph.chat.submit(child.id, instruction, null, conversation.authorizationMode == "ALLOW", JSONArray(), intent = "NEW_TASK")
+        try { submission.await() }
+        catch (error: CancellationException) { submission.cancel(); throw error }
         preferences.edit().putString("organized:${conversation.id}", turn.id).putString("lastTask", child.id).commit()
     }
     fun json(row: MemoryEntity) = JSONObject().put("memoryId", row.id).put("scope", if (row.projectId == null) "global" else "project").put("projectId", row.projectId ?: JSONObject.NULL)

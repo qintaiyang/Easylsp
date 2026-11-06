@@ -200,7 +200,6 @@
         "create_plugin",
         "edit_plugin",
         "read_plugin_logs",
-        "read_development_reference",
         "import_plugin_zip",
         "export_plugin_zip",
         "export_plugin_apk",
@@ -355,6 +354,34 @@
         "clear_project_logs",
         "clear_storage",
         "set_project_group"
+      ]
+    },
+    {
+      "id": "release.local",
+      "description": "固定本地发行准备与真实准备状态（尚未公开上传/投稿）",
+      "scopes": [
+        "GLOBAL",
+        "PROJECT"
+      ],
+      "tools": [
+        "read_development_reference",
+        "activate_plugin_release",
+        "prepare_plugin_release",
+        "get_plugin_release_status"
+      ]
+    },
+    {
+      "id": "release.github",
+      "description": "GitHub 固定发行上传、市场投稿与真实审核收录状态；凭据仅在作者界面配置",
+      "scopes": [
+        "GLOBAL",
+        "PROJECT"
+      ],
+      "tools": [
+        "read_development_reference",
+        "publish_plugin_release",
+        "submit_market_release",
+        "get_market_submission_status"
       ]
     }
   ],

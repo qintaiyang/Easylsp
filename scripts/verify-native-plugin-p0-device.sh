@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-serial="${1:-127.0.0.1:15555}"
+serial="${1:?Usage: $0 DEVICE_SERIAL}"
 repository=$(cd "$(dirname "$0")/.." && pwd)
 evidence="$repository/app/build/native-p0-device"
 mkdir -p "$evidence"

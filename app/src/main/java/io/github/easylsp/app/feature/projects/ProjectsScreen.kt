@@ -15,36 +15,57 @@ import io.github.easylsp.app.MainViewModel
 import io.github.easylsp.app.ui.components.*
 import kotlinx.coroutines.launch
 
-@Composable fun ProjectsScreen(vm: MainViewModel, open: (String) -> Unit, add: () -> Unit, importApk: () -> Unit) {
+@OptIn(ExperimentalFoundationApi::class)
+@Composable fun ProjectsScreen(vm: MainViewModel, open: (String) -> Unit, add: () -> Unit, importApk: () -> Unit, openConversation: (String) -> Unit, newChat: () -> Unit) {
     val projects by vm.projects.collectAsStateWithLifecycle()
     val sort by vm.graph.settings.projectSort.collectAsStateWithLifecycle("recent")
     val filter by vm.graph.settings.projectFilter.collectAsStateWithLifecycle("all")
     val scope = rememberCoroutineScope()
     var query by rememberSaveable { mutableStateOf("") }
     var group by rememberSaveable { mutableStateOf("") }
-    val matching = projects.filter { (filter == "all" || it.kind == filter) && (group.isEmpty() || it.groupName == group) && (it.name.contains(query, true) || it.packageName.contains(query, true)) }
+    var archived by rememberSaveable { mutableStateOf(false) }
+    val busy by vm.busy.collectAsStateWithLifecycle()
+    var selected by remember { mutableStateOf<io.github.easylsp.app.data.ProjectEntity?>(null) }
+    var deleting by remember { mutableStateOf<io.github.easylsp.app.data.ProjectEntity?>(null) }
+    var name by remember { mutableStateOf("") }
+    val matching = projects.filter { it.archived == archived && (filter == "all" || it.kind == filter) && (group.isEmpty() || it.groupName == group) && (it.name.contains(query, true) || it.packageName.contains(query, true)) }
         .let { if (sort == "recent") it.sortedByDescending { p -> p.lastOpenedAt } else it.sortedBy { p -> p.name.lowercase() } }
     Column(Modifier.fillMaxSize()) {
-        OutlinedTextField(query, { query = it }, label = { Text("搜索项目名称或包名") }, leadingIcon = { Icon(AppIcons.Search, null) }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp))
+        if (filter != "CHAT") OutlinedTextField(query, { query = it }, label = { Text("搜索项目名称或包名") }, leadingIcon = { Icon(AppIcons.Search, null) }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp))
         Row(Modifier.padding(horizontal = 16.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("all" to "全部", "INSTALLED" to "设备应用", "IMPORTED" to "导入 APK").forEach { (value, label) -> FilterChip(filter == value, { scope.launchSetting { vm.graph.settings.projectFilter(value) } }, label = { Text(label) }) }
+            listOf("all" to "全部", "INSTALLED" to "设备应用", "IMPORTED" to "导入 APK（静态分析）", "CHAT" to "聊天会话").forEach { (value, label) -> FilterChip(filter == value, { scope.launchSetting { vm.graph.settings.projectFilter(value) } }, label = { Text(label) }) }
         }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-            TextButton(onClick = { scope.launchSetting { vm.graph.settings.projectSort(if (sort == "recent") "name" else "recent") } }) { Icon(AppIcons.Sort, null); Text(if (sort == "recent") "最近访问" else "名称排序") }
-            Row { TextButton(onClick = importApk) { Text("导入 APK") }; TextButton(onClick = add) { Icon(AppIcons.Add, null); Text("添加") } }
-        }
-        if (projects.any { it.groupName.isNotEmpty() }) Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
-            (listOf("") + projects.map { it.groupName }.filter { it.isNotEmpty() }.distinct()).forEach { name -> FilterChip(group == name, { group = name }, label = { Text(name.ifEmpty { "全部分组" }) }) }
-        }
-        if (matching.isEmpty()) EmptyState("没有匹配的项目", "添加设备应用或导入 APK 后，即可在这里再次打开。", "添加应用", add)
-        LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(matching, key = { it.id }) { item ->
-                Card(onClick = { open(item.id) }) {
-                    ListItem(leadingContent = { ProjectIcon(item, vm) }, headlineContent = { Text(item.name) }, supportingContent = { Text("${item.packageName}\n${item.version} · ${if (item.kind == "IMPORTED") "导入 APK · 样本 r${item.sampleRevision}" else "设备应用"}") }, trailingContent = { Icon(AppIcons.ChevronRight, null) })
+        if (filter == "CHAT") {
+            io.github.easylsp.app.feature.chat.ConversationHistoryScreen(vm, globalOnly = true, newChat = newChat, open = openConversation)
+        } else {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                TextButton(onClick = { scope.launchSetting { vm.graph.settings.projectSort(if (sort == "recent") "name" else "recent") } }) { Text(if (sort == "recent") "最近访问" else "名称排序") }
+                FilterChip(archived, { archived = !archived }, label = { Text("已归档") })
+            }
+            Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (filter != "INSTALLED") Button(enabled = !busy, onClick = importApk) { Text("导入 APK（静态分析）") }
+                if (filter != "IMPORTED") OutlinedButton(enabled = !busy, onClick = add) { Text("添加应用") }
+            }
+            if (projects.any { it.groupName.isNotEmpty() }) Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+                (listOf("") + projects.map { it.groupName }.filter { it.isNotEmpty() }.distinct()).forEach { value -> FilterChip(group == value, { group = value }, label = { Text(value.ifEmpty { "全部分组" }) }) }
+            }
+            if (matching.isEmpty()) EmptyState(if (archived) "没有归档项目" else "没有匹配的项目", "选择 APK 后可直接进行静态分析；导入不会安装应用。")
+            LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                items(matching, key = { it.id }) { item ->
+                    Card(Modifier.combinedClickable(onClick = { open(item.id) }, onLongClick = { selected = item; name = item.name })) {
+                        ListItem(leadingContent = { ProjectIcon(item, vm) }, headlineContent = { Text(item.name) }, supportingContent = { Text("${item.packageName}\n${item.version} · 用户 ${item.userId} · ${if (item.kind == "IMPORTED") "静态分析 · 样本 r${item.sampleRevision}" else "设备应用"}") }, trailingContent = { TextButton(onClick = { selected = item; name = item.name }) { Text("管理") } })
+                    }
                 }
             }
         }
     }
+    selected?.let { item -> AlertDialog(onDismissRequest = { selected = null }, title = { Text("管理项目") }, text = { Column {
+        OutlinedTextField(name, { name = it }, label = { Text("名称") })
+        TextButton(enabled = !busy, onClick = { vm.action { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { vm.graph.store.dao.archiveProject(item.id, !item.archived) }; selected = null; "归档状态已更新，发布与会话保留" } }) { Text(if (item.archived) "取消归档" else "归档") }
+        TextButton(onClick = { selected = null; deleting = item }) { Text("删除…") }
+    } }, confirmButton = { TextButton(enabled = !busy && name.isNotBlank(), onClick = { vm.action { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { vm.graph.store.dao.updateProject(item.copy(name = name.trim())) }; selected = null; "名称已保存" } }) { Text("保存") } }, dismissButton = { TextButton(onClick = { selected = null }) { Text("关闭") } }) }
+    deleting?.let { item -> AlertDialog(onDismissRequest = { deleting = null }, title = { Text("删除“${item.name}”？") }, text = { Text("将停止所属任务、撤销下次启动发布并删除会话、样本与本地开发内容。Native 已加载代码仍需目标退出；正在使用的产物暂存以供清理。不会卸载目标应用。撤销失败时保留项目。") }, confirmButton = { TextButton(enabled = !busy, onClick = { vm.action { vm.graph.localManagement.deleteProject(item.id); deleting = null; "项目已删除；旧 Native 进程需退出" } }) { Text("停止并删除") } }, dismissButton = { TextButton(onClick = { deleting = null }) { Text("取消") } }) }
+
 }
 
 @Composable fun AddAppScreen(vm: MainViewModel, open: (String) -> Unit) {

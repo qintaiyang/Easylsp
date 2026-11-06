@@ -18,6 +18,10 @@ class NativePluginContractTest {
     @Test fun nativeSourceArchiveIsTypedAndRejectsUnsupportedContract() {
         val accepted = PluginArchive.read(archive("info.prop" to metadata, "src/main.c" to "int main;", "include/types.h" to "typedef int value;").inputStream())
         assertTrue("src/main.c" in accepted)
+        val api31 = PluginArchive.read(archive("info.prop" to metadata.replace("=34", "=31"), "src/main.c" to "int main;", "README.md" to "Source", "LICENSE" to "MIT", "config.schema.json" to "{}").inputStream())
+        assertTrue("src/main.c" in api31)
+        assertEquals("MIT", api31.getValue("LICENSE").toString(Charsets.UTF_8))
+        assertThrows(IllegalArgumentException::class.java) { PluginArchive.read(archive("info.prop" to metadata, "src/main.c" to "int main;", "install.sh" to "echo install").inputStream()) }
         for (info in listOf(metadata.replace("arm64-v8a", "x86_64"), metadata.replace("=34", "=33"), metadata.replace("nativeApiVersion=1", "nativeApiVersion=2")))
             assertThrows(IllegalArgumentException::class.java) { PluginArchive.read(archive("info.prop" to info, "src/main.c" to "int main;").inputStream()) }
         assertThrows(IllegalArgumentException::class.java) { PluginArchive.read(archive("info.prop" to metadata, "main.java" to "void onLoad() {}").inputStream()) }

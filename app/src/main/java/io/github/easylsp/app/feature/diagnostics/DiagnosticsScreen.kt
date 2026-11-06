@@ -1,5 +1,6 @@
 package io.github.easylsp.app.feature.diagnostics
 
+import io.github.easylsp.app.util.readUpTo
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll
@@ -80,7 +81,7 @@ import kotlinx.coroutines.withContext
         if (uri != null) vm.action {
             withContext(Dispatchers.IO) {
                 val text = requireNotNull(graph.contentResolver.openInputStream(uri)).use { input ->
-                    val bytes = input.readNBytes(4 * 1024 * 1024 + 1)
+                    val bytes = input.readUpTo(4 * 1024 * 1024 + 1)
                     require(bytes.size <= 4 * 1024 * 1024) { "tombstone 文本不能超过 4 MiB" }; bytes.toString(Charsets.UTF_8)
                 }
                 diagnostics.importTombstone(project, text)

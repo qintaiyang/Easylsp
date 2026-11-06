@@ -1,5 +1,6 @@
 package io.github.easylsp.app.platform.harness
 
+import io.github.easylsp.app.util.readUpTo
 import java.util.logging.Logger
 import java.util.logging.Level
 import io.github.easylsp.app.platform.tools.*
@@ -41,7 +42,7 @@ class HarnessToolBridge(@Volatile private var tools: List<ToolDefinition>, port:
         if (!request.startsWith("POST /mcp ")) { respond("405 Method Not Allowed"); return }
         val size = headers["content-length"]?.toIntOrNull() ?: 0
         if (size !in 1..2 * 1024 * 1024) { respond("400 Bad Request"); return }
-        val frame = JSONObject(String(input.readNBytes(size), Charsets.UTF_8))
+        val frame = JSONObject(String(input.readUpTo(size), Charsets.UTF_8))
         val method = frame.getString("method"); val params = frame.optJSONObject("params") ?: JSONObject()
         Logger.getLogger("HarnessTools").info("MCP $method id=${frame.opt("id")}")
         if (!frame.has("id")) {
@@ -83,5 +84,6 @@ class HarnessToolBridge(@Volatile private var tools: List<ToolDefinition>, port:
         }
         respond("200 OK", response.toString())
     }
+    suspend fun closeAndJoin() { close(); scope.coroutineContext.job.join() }
     override fun close() { scope.cancel(); server.close() }
 }

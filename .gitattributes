@@ -1,0 +1,5 @@
+# Preserve upstream and patch formatting during whitespace checks.
+app/src/main/assets/third-party/** -whitespace
+native-runtime/third_party/** -whitespace
+zygisk-host/third_party/** -whitespace
+*.patch whitespace=-blank-at-eol

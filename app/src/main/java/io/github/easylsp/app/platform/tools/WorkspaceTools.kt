@@ -1,5 +1,6 @@
 package io.github.easylsp.app.platform.tools
 
+import io.github.easylsp.app.util.readUpTo
 import io.github.easylsp.app.EasylspApp
 import io.github.easylsp.app.platform.network.HttpCalls
 import okhttp3.*
@@ -48,7 +49,7 @@ class WorkspaceTools(private val graph: EasylspApp, private val binding: RunBind
                     val target = paths.next().toFile(); if (!target.isFile) continue
                     if (target.name.contains(query, true)) { if (count++ >= offset) matches += JSONObject().put("path", target.path).put("line", 0).put("text", target.name) }
                     target.inputStream().use { input ->
-                        val prefix = input.readNBytes(4096)
+                        val prefix = input.readUpTo(4096)
                         if (prefix.contains(0.toByte())) return@use
                         target.useLines { lines ->
                             val iterator = lines.iterator(); var line = 0

@@ -1,0 +1,39 @@
+--- a/sh_linker.c
++++ b/sh_linker.c
+@@ -23,6 +23,7 @@
+ 
+ #include "sh_linker.h"
+ 
++#include <android/dlext.h>
+ #include <dlfcn.h>
+ #include <pthread.h>
+ #include <stddef.h>
+@@ -55,6 +56,16 @@
+ 
+ #define SH_LINKER_SHADOWHOOK_BASE_NAME         "libshadowhook.so"
+ #define SH_LINKER_SHADOWHOOK_NOTHING_BASE_NAME "libshadowhook_nothing.so"
++
++/* Host adapter. The caller owns the FD throughout synchronous initialization. */
++static int easylsp_helper_fd = -1;
++__attribute__((visibility("default"))) int easylsp_shadowhook_init_with_fd(int fd);
++int easylsp_shadowhook_init_with_fd(int fd) {
++  easylsp_helper_fd = fd;
++  int result = shadowhook_init(SHADOWHOOK_MODE_UNIQUE, false);
++  easylsp_helper_fd = -1;
++  return result;
++}
+ 
+ // for struct soinfo's memory scan
+ static size_t sh_linker_soinfo_offset_load_bias = SIZE_MAX;
+@@ -576,7 +587,10 @@
+ 
+   // do memory scan for struct soinfo
+   __atomic_store_n(&sh_linker_soinfo_offset_scan_tid, gettid(), __ATOMIC_RELEASE);
+-  void *handle = dlopen(SH_LINKER_SHADOWHOOK_NOTHING_BASE_NAME, RTLD_NOW);
++  android_dlextinfo extension = {.flags = ANDROID_DLEXT_USE_LIBRARY_FD, .library_fd = easylsp_helper_fd};
++  void *handle = easylsp_helper_fd >= 0
++      ? android_dlopen_ext(SH_LINKER_SHADOWHOOK_NOTHING_BASE_NAME, RTLD_NOW, &extension)
++      : dlopen(SH_LINKER_SHADOWHOOK_NOTHING_BASE_NAME, RTLD_NOW);
+   if (__predict_true(NULL != handle)) dlclose(handle);
+   __atomic_store_n(&sh_linker_soinfo_offset_scan_tid, 0, __ATOMIC_RELEASE);
+   if (__predict_false(NULL == handle)) {

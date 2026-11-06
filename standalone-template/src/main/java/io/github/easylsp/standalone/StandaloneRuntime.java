@@ -12,7 +12,7 @@ import java.util.zip.ZipFile;
 final class StandaloneRuntime {
     private static PluginEngine engine;
     static String read(String apk, String entry) throws IOException {
-        try (ZipFile zip = new ZipFile(apk); InputStream input = zip.getInputStream(zip.getEntry(entry))) { return new String(input.readAllBytes(), StandardCharsets.UTF_8); }
+        try (ZipFile zip = new ZipFile(apk); InputStream input = zip.getInputStream(zip.getEntry(entry))) { return new String(io.github.easylsp.runtime.StreamIO.readAll(input), StandardCharsets.UTF_8); }
     }
     static JSONObject config(String apk) throws Exception { return new JSONObject(read(apk, "assets/standalone/config.json")); }
     private static ClassLoader dependencies(String apk, ClassLoader parent) throws IOException {
@@ -20,10 +20,10 @@ final class StandaloneRuntime {
         try (ZipFile zip = new ZipFile(apk)) {
             for (var entry : java.util.Collections.list(zip.entries())) if (entry.getName().startsWith("assets/standalone/lib/")) {
                 try (InputStream input = zip.getInputStream(entry)) {
-                    if (entry.getName().endsWith(".dex")) buffers.add(java.nio.ByteBuffer.wrap(input.readAllBytes()));
+                    if (entry.getName().endsWith(".dex")) buffers.add(java.nio.ByteBuffer.wrap(io.github.easylsp.runtime.StreamIO.readAll(input)));
                     else try (java.util.zip.ZipInputStream library = new java.util.zip.ZipInputStream(input)) {
                         java.util.zip.ZipEntry dex;
-                        while ((dex = library.getNextEntry()) != null) if (dex.getName().matches("classes(?:[0-9]+)?\\.dex")) buffers.add(java.nio.ByteBuffer.wrap(library.readAllBytes()));
+                        while ((dex = library.getNextEntry()) != null) if (dex.getName().matches("classes(?:[0-9]+)?\\.dex")) buffers.add(java.nio.ByteBuffer.wrap(io.github.easylsp.runtime.StreamIO.readAll(library)));
                     }
                 }
             }

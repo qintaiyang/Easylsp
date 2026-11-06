@@ -14,7 +14,7 @@ class SampleStore(private val context: Context, private val store: ProjectStore)
     private val root = File(context.filesDir, "samples").apply { mkdirs() }
     suspend fun capture(project: ProjectEntity): ProjectEntity = withContext(Dispatchers.IO) {
         require(project.kind == "INSTALLED") { "导入项目请使用重新导入" }
-        val info = context.packageManager.getPackageInfo(project.packageName, 0)
+        val info = (context.applicationContext as EasylspApp).targetApplications.info(project.packageName, project.userId)
         val app = requireNotNull(info.applicationInfo)
         save(project, listOf(File(app.sourceDir)) + (app.splitSourceDirs?.map(::File) ?: emptyList()), info.versionName ?: "", useRoot = (context.applicationContext as EasylspApp).root.useRoot())
     }
@@ -48,7 +48,7 @@ class SampleStore(private val context: Context, private val store: ProjectStore)
             } else file.copyTo(destination)
             destination
         }
-        val next = current.copy(version = version, sampleRevision = revision)
+        val next = current.copy(version = version, sampleRevision = revision, archived = if (current.kind == "IMPORTED") false else current.archived)
         store.transaction {
             store.dao.insertSample(SampleEntity(project.id, revision, JSONArray(files.map { it.path }).toString(), version, System.currentTimeMillis()))
             store.dao.updateProject(next)

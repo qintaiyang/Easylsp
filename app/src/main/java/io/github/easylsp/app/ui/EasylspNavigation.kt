@@ -15,6 +15,8 @@ import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.*
 import io.github.easylsp.app.MainViewModel
 import io.github.easylsp.app.feature.home.HomeScreen
+import io.github.easylsp.app.feature.home.ApplicationScopeScreen
+import io.github.easylsp.app.feature.home.EnabledPluginsScreen
 import io.github.easylsp.app.feature.projects.*
 import io.github.easylsp.app.feature.settings.*
 import io.github.easylsp.app.feature.logs.LogsScreen
@@ -23,6 +25,7 @@ import io.github.easylsp.app.feature.chat.ConversationScreen
 import io.github.easylsp.app.ui.components.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -30,7 +33,10 @@ import java.io.File
 @Composable fun EasylspNavigation(vm: MainViewModel = viewModel(), destination: kotlinx.coroutines.flow.StateFlow<String?>? = null, consumed: () -> Unit = {}) {
     val nav = rememberNavController()
     val scope = rememberCoroutineScope()
-    LaunchedEffect(destination) { destination?.collect { route -> if (route != null) { nav.navigate(route) { launchSingleTop = true }; consumed() } } }
+    LaunchedEffect(destination) {
+        nav.currentBackStackEntryFlow.first()
+        destination?.collect { route -> if (route != null) { nav.navigate(route) { launchSingleTop = true }; consumed() } }
+    }
     var editorBack by remember { mutableStateOf<(() -> Unit)?>(null) }
     val entry by nav.currentBackStackEntryAsState()
     val route = entry?.destination?.route
@@ -52,14 +58,27 @@ import java.io.File
             if (nav.currentBackStackEntry === origin && origin?.lifecycle?.currentState?.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED) == true) nav.navigate("viewer/$id?title=${Uri.encode(title)}&language=${Uri.encode(language)}")
         }
     }
+    var pendingChat by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    val models by remember { vm.graph.models.available() }.collectAsStateWithLifecycle(emptyList())
+    fun newGlobalChat() {
+        vm.action {
+            val id = withContext(Dispatchers.IO) { if (vm.graph.models.defaultModel(null) == null) null else vm.graph.conversations.create().id }
+            if (id == null) { pendingChat = true; nav.navigate("settings/models") } else nav.navigate("chat/$id")
+            ""
+        }
+    }
+    LaunchedEffect(route, models.isNotEmpty(), pendingChat) {
+        if (pendingChat && route == "projects" && models.isNotEmpty()) { pendingChat = false; newGlobalChat() }
+    }
     val apkImport = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) vm.action { val created = vm.graph.samples.importApk(uri); nav.navigate("project/${created.id}"); "APK 已导入" }
+        if (uri != null) vm.action { val created = withContext(Dispatchers.IO) { vm.graph.samples.importApk(uri) }; nav.navigate("project/${created.id}") { launchSingleTop = true }; "APK 已导入" }
     }
     val importApk = { apkImport.launch(arrayOf("application/vnd.android.package-archive", "application/octet-stream")) }
-    val rootRoutes = listOf("home", "projects", "settings")
+    val rootRoutes = listOf("home", "projects", "market", "settings")
     val titles = mapOf("appearance" to "外观", "models" to "模型", "extensions" to "扩展与工具", "environment" to "执行环境", "storage" to "存储", "about" to "关于")
     val title = when (route) {
-        "home" -> "Easylsp"; "projects" -> "已添加项目"; "settings" -> "设置"; "apps" -> "添加应用"
+        "home" -> "Easylsp"; "projects" -> "已添加项目"; "settings" -> "设置"; "market" -> "插件市场"; "apps" -> "添加应用"
+        "application-scope" -> "作用应用"; "enabled-plugins" -> "已启用插件"
         "settings/{category}" -> titles[entry?.arguments?.getString("category")] ?: "设置"
         "project/{projectId}" -> projects.firstOrNull { it.id == entry?.arguments?.getString("projectId") }?.name ?: "项目"
         "editor/{projectId}/{pluginId}?signature={signature}" -> plugins.firstOrNull { it.id == entry?.arguments?.getString("pluginId") }?.name ?: "编辑插件"
@@ -69,7 +88,7 @@ import java.io.File
     }
     Scaffold(
         topBar = { if (route?.startsWith("chat/") != true) TopAppBar(title = { Text(title, maxLines = 1) }, navigationIcon = { if (route !in rootRoutes) IconButton(onClick = { if (route?.startsWith("editor/") == true) editorBack?.invoke() else nav.popBackStack() }) { Icon(AppIcons.ArrowBack, "返回") } }) },
-        bottomBar = { if (route in rootRoutes) NavigationBar { listOf(Triple("home", "首页", AppIcons.Home), Triple("projects", "项目", AppIcons.Apps), Triple("settings", "设置", AppIcons.Settings)).forEach { (id, label, icon) ->
+        bottomBar = { if (route in rootRoutes) NavigationBar { listOf(Triple("home", "首页", AppIcons.Home), Triple("projects", "项目", AppIcons.Apps), Triple("market", "市场", AppIcons.Extension), Triple("settings", "设置", AppIcons.Settings)).forEach { (id, label, icon) ->
             NavigationBarItem(selected = route == id, onClick = { nav.navigate(id) { popUpTo(nav.graph.findStartDestination().id) { saveState = true }; launchSingleTop = true; restoreState = true } }, icon = { Icon(icon, null) }, label = { Text(label) }, alwaysShowLabel = !compact)
         } } },
         snackbarHost = { SnackbarHost(snackbar) }
@@ -77,16 +96,13 @@ import java.io.File
         Column(Modifier.padding(padding).consumeWindowInsets(padding).imePadding().fillMaxSize()) {
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
             NavHost(nav, startDestination = "home", modifier = Modifier.weight(1f)) {
-                composable("home") { HomeScreen(vm, ::project, { nav.navigate("apps") }, {
-                    vm.action {
-                        val id = withContext(Dispatchers.IO) { if (vm.graph.models.defaultModel(null) == null) null else vm.graph.conversations.create().id }
-                        if (id == null) nav.navigate("settings/models") else nav.navigate("chat/$id")
-                        ""
-                    }
-                }, { nav.navigate("settings/models") }, { nav.navigate("chat/$it") }, { nav.navigate("conversations") }) }
+                composable("home") { HomeScreen(vm, { nav.navigate("application-scope") }, { nav.navigate("enabled-plugins") }) { nav.navigate("settings/$it") } }
+                composable("application-scope") { ApplicationScopeScreen(vm) }
+                composable("enabled-plugins") { EnabledPluginsScreen(vm) { projectId, pluginId -> nav.navigate("editor/$projectId/$pluginId") } }
                 composable("conversations") { io.github.easylsp.app.feature.chat.ConversationHistoryScreen(vm) { nav.navigate("chat/$it") } }
-                composable("projects") { ProjectsScreen(vm, ::project, { nav.navigate("apps") }, importApk) }
+                composable("projects") { ProjectsScreen(vm, ::project, { nav.navigate("apps") }, importApk, { nav.navigate("chat/$it") }, ::newGlobalChat) }
                 composable("apps") { AddAppScreen(vm, ::project) }
+                composable("market") { io.github.easylsp.app.feature.market.MarketScreen(vm) }
                 composable("settings") { SettingsScreen { nav.navigate("settings/$it") } }
                 composable("settings/{category}") { item -> SettingsDetailScreen(vm, requireNotNull(item.arguments?.getString("category"))) { name, text -> viewer(name, text) } }
                 composable("project/{projectId}") { item ->
@@ -103,7 +119,7 @@ import java.io.File
                         { name, text, language -> viewer(name, text, language) },
                         { conversation, session -> nav.navigate("chat/$conversation?session=${session.orEmpty()}") },
                         { signature -> nav.navigate("template/$id?signature=${Uri.encode(signature)}") })
-                    else LoadingState("正在读取项目…")
+                    else EmptyState("项目不存在或已删除", "返回项目列表继续。", "返回项目", { nav.navigate("projects") { popUpTo("home") } })
                 }
                 composable("editor/{projectId}/{pluginId}?signature={signature}") { item ->
                     val current = projects.firstOrNull { it.id == item.arguments?.getString("projectId") }
@@ -115,15 +131,17 @@ import java.io.File
                         val host = sessions.values.firstOrNull { it.packageName == current.packageName && it.processName == plugin.processName.ifEmpty { current.packageName } }
                         val instance = host?.let { instances["${it.id}/${plugin.id}"] }
                         Editor(vm, current, plugin, if (host == null) "OFFLINE" else instance?.state ?: "STOPPED", instance?.takeIf { it.state == "RUNNING" }?.revision ?: 0, instance?.error.orEmpty(), busy, { exporter.launch("${plugin.name}.zip") }, { nav.popBackStack() }, { nav.popBackStack() }, { editorBack = it }, { nav.navigate("logs/${current.id}?plugin=${plugin.id}") }, item.arguments?.getString("signature").orEmpty())
-                    }
+                    } else EmptyState("插件或项目已删除", "返回项目列表继续。", "返回项目", { nav.navigate("projects") { popUpTo("home") } })
                 }
                 composable("logs/{projectId}?session={session}&plugin={plugin}") { item ->
                     val current = projects.firstOrNull { it.id == item.arguments?.getString("projectId") }
                     if (current != null) LogsScreen(vm, current, item.arguments?.getString("session")?.takeIf { it.isNotEmpty() }, item.arguments?.getString("plugin")?.takeIf { it.isNotEmpty() }, { name, text -> viewer(name, text) }, { plugin -> nav.navigate("editor/${current.id}/$plugin") })
+                    else EmptyState("项目不存在或已删除", "返回项目列表继续。", "返回项目", { nav.navigate("projects") { popUpTo("home") } })
                 }
                 composable("conversation-terminal/{conversationId}") { item ->
                     val id = requireNotNull(item.arguments?.getString("conversationId"))
                     val conversation by remember(id) { vm.graph.store.workflows.observeConversation(id) }.collectAsStateWithLifecycle(null)
+                    if (conversation == null) EmptyState("会话不存在或已删除", "返回会话列表继续。", "返回会话列表", { nav.navigate("conversations") { popUpTo("home") } })
                     conversation?.let { row ->
                         val workspace = io.github.easylsp.app.platform.terminal.Workspace(row.projectId ?: row.id, row.scope)
                         LaunchedEffect(workspace) { withContext(Dispatchers.IO) { vm.graph.executions.bind(workspace) } }
@@ -137,8 +155,15 @@ import java.io.File
                     val preferred = item.arguments?.getString("session")
                     val host = sessions.values.firstOrNull { it.id == preferred && it.packageName == current?.packageName }
                         ?: sessions.values.firstOrNull { current != null && it.packageName == current.packageName && it.processName == current.packageName }
+                    val backToList: () -> Unit = {
+                        if (conversation?.projectId == null) {
+                            scope.launch { vm.graph.settings.projectFilter("CHAT"); nav.navigate("projects") { popUpTo("home"); launchSingleTop = true } }
+                        } else { nav.popBackStack() }
+                    }
+                    androidx.activity.compose.BackHandler(onBack = backToList)
                     if (conversation != null) ConversationScreen(current, conversationId, host?.id, { name, text, language -> viewer(name, text, language) },
-                        { plugin -> current?.let { nav.navigate("editor/${it.id}/$plugin") } }, back = { nav.popBackStack() }, openConversation = { nav.navigate("chat/$it") }, openTerminal = { nav.navigate("conversation-terminal/$conversationId") })
+                        { plugin -> current?.let { nav.navigate("editor/${it.id}/$plugin") } }, back = backToList,
+                        openConversation = { nav.navigate("chat/$it") }, openTerminal = { nav.navigate("conversation-terminal/$conversationId") }) else EmptyState("会话不存在或已删除", "返回列表继续。", "返回会话列表", { nav.navigate("conversations") { popUpTo("home") } })
                 }
                 composable("template/{projectId}?signature={signature}") { item ->
                     val current = projects.firstOrNull { it.id == item.arguments?.getString("projectId") }
@@ -148,7 +173,7 @@ import java.io.File
                         SectionHeader("将模板插入插件")
                         Button(onClick = { vm.create(current, null, "方法 Hook", description = signature) { plugin -> nav.navigate("editor/${current.id}/${plugin.id}?signature=${Uri.encode(signature)}") } }) { Text("新建插件") }
                         plugins.filter { it.projectId == current.id }.forEach { plugin -> TextButton(onClick = { nav.navigate("editor/${current.id}/${plugin.id}?signature=${Uri.encode(signature)}") }) { Text(plugin.name) } }
-                    }
+                    } else EmptyState("项目不存在或已删除", "返回项目列表继续。", "返回项目", { nav.navigate("projects") { popUpTo("home") } })
                 }
                 composable("viewer/{id}?title={title}&language={language}") { item -> StoredViewer(viewers, requireNotNull(item.arguments?.getString("id")), item.arguments?.getString("language") ?: "text") }
             }

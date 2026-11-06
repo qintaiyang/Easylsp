@@ -4,4 +4,4 @@ nativeApiVersion=1
 name=Demo 构造前符号 Hook
 entry=src/main.c
 abi=arm64-v8a
-minApi=34
+minApi=31

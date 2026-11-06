@@ -19,10 +19,13 @@ class TaskInteractions(private val dao: WorkflowDao) {
         finally {
             pending.remove(row.id)
             withContext(NonCancellable) {
-                val saved = requireNotNull(dao.interaction(row.id))
-                if (saved.status == "PENDING") dao.saveInteraction(saved.copy(status = "INTERRUPTED"))
+                val saved = dao.interaction(row.id)
+                if (saved?.status == "PENDING") dao.saveInteraction(saved.copy(status = "INTERRUPTED"))
             }
         }
+    }
+    fun cancelConversation(id: String) {
+        dao.interactionHistory(id).forEach { row -> pending.remove(row.id)?.cancel() }
     }
     fun answer(id: String, response: JSONObject) {
         val answer = pending[id] ?: error("此提问所属任务已结束")

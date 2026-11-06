@@ -20,6 +20,7 @@ class DiagnosticCoordinator(private val graph: EasylspApp) {
     val store = DiagnosticStore(graph.filesDir, graph.store.diagnostics)
     private class Active(var row: DiagnosticEntity, val target: DiagnosticTarget, val report: JSONObject) {
         val stop = CompletableDeferred<Unit>()
+        val ended = CompletableDeferred<Unit>()
     }
     private val active = ConcurrentHashMap<String, Active>()
     private val starts = Mutex()
@@ -38,11 +39,11 @@ class DiagnosticCoordinator(private val graph: EasylspApp) {
         require(project.kind == "INSTALLED") { "诊断启动需要已安装目标" }
         require(durationSeconds in 5..120) { "采集时限必须在 5..120 秒内" }
         require(mode == DiagnosticMode.EXTERNAL_ONLY || restart) { "入口对照需要 restart=true，重新创建进程后配置才会生效" }
-        val info = graph.packageManager.getPackageInfo(project.packageName, 0)
+        val info = graph.targetApplications.info(project.packageName, project.userId)
         val target = DiagnosticTarget(project.packageName, requireNotNull(info.applicationInfo).uid, processName)
         require(active.values.none { it.target.uid == target.uid }) { "此 UID 已有进行中的诊断，请读取或停止已有诊断" }
         val sample = if (sampleRevision > 0) requireNotNull(graph.store.dao.sample(project.id, sampleRevision)) { "样本版本不存在" } else null
-        val launch = requireNotNull(graph.packageManager.getLaunchIntentForPackage(project.packageName)) { "目标无启动入口" }
+        val launch = if (project.userId == android.os.Process.myUid() / 100000) requireNotNull(graph.packageManager.getLaunchIntentForPackage(project.packageName)) { "目标无启动入口" } else Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setPackage(project.packageName)
         val row = DiagnosticEntity(UUID.randomUUID().toString(), project.id, sampleRevision, project.packageName, mode.name, System.currentTimeMillis())
         graph.executions.directory(project.id)
         val dir = store.directory(project.id, row.id).apply { mkdirs() }
@@ -76,6 +77,7 @@ class DiagnosticCoordinator(private val graph: EasylspApp) {
             JSONObject().put("diagnosticRunId", row.id).put("executionId", executionId).put("restartRequested", restart)
         } catch (error: Exception) {
             active.remove(row.id)
+            run.ended.complete(Unit)
             report.getJSONArray("limitations").put(error.toString())
             store.write(row.copy(state = "ERROR", finishedAt = System.currentTimeMillis()), report)
             throw error
@@ -113,6 +115,12 @@ class DiagnosticCoordinator(private val graph: EasylspApp) {
         store.write(row, report)
         row.id
     }
+    suspend fun stopProject(projectId: String) {
+        recovered.await()
+        val runs = active.values.filter { it.row.projectId == projectId }
+        runs.forEach { it.stop.complete(Unit) }
+        runs.forEach { it.ended.await() }
+    }
     fun stopAll() { active.values.forEach { it.stop.complete(Unit) } }
     fun bridgeEvent(packageName: String, processName: String, pid: Int, uid: Int, sessionId: String, phase: String, runId: String? = null) {
         scope.launch {
@@ -139,7 +147,9 @@ class DiagnosticCoordinator(private val graph: EasylspApp) {
         val dir = store.directory(run.row.projectId, run.row.id)
         val raw = File(dir, "raw")
         val key = "${run.target.uid}:${run.target.packageName}"
+        val zygisk = graph.store.dao.project(run.row.projectId)?.nativeBackend == "ZYGISK"
         var configured = false
+        var javaConfigured = false
         var native: NativeObservation? = null
         var logger: Job? = null
         var monitor: Job? = null
@@ -169,9 +179,11 @@ class DiagnosticCoordinator(private val graph: EasylspApp) {
             }
             if (run.row.mode != DiagnosticMode.EXTERNAL_ONLY.name) {
                 val now = SystemClock.elapsedRealtime()
-                graph.framework.publishDiagnostic(key, JSONObject().put("diagnosticRunId", run.row.id).put("mode", run.row.mode)
+                val settings = JSONObject().put("backend", if (zygisk) "ZYGISK" else "LIBXPOSED").put("diagnosticRunId", run.row.id).put("mode", run.row.mode)
                     .put("processName", run.target.processName).put("startedElapsed", now).put("expiresElapsed", now + (duration + 30) * 1000)
-                    .put("expiresAt", System.currentTimeMillis() + (duration + 30) * 1000).put("nativeSocket", native?.socketName))
+                    .put("expiresAt", System.currentTimeMillis() + (duration + 30) * 1000).put("nativeSocket", native?.socketName)
+                if (zygisk) { graph.nativeHost.diagnostic(run.target.uid, run.target.packageName, settings); configured = true }
+                if (!zygisk || graph.framework.state.value.active) { graph.framework.publishDiagnostic(key, settings); javaConfigured = true }
                 configured = true
                 event(run, "configuration_published")
             }
@@ -208,7 +220,12 @@ class DiagnosticCoordinator(private val graph: EasylspApp) {
                     catch (cancel: CancellationException) { throw cancel }
                     catch (error: Exception) { monitorFailure = error.toString() }
                 }
-                withContext(Dispatchers.Main) { graph.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                if (run.target.uid / 100000 == android.os.Process.myUid() / 100000) withContext(Dispatchers.Main) { graph.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                else {
+                    check(root) { "跨用户启动需要root" }
+                    val (code, output) = command(dir, "am start --user ${run.target.uid / 100000} -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p ${RootCommand.quote(run.target.packageName)}")
+                    File(raw, "launch.txt").writeText(output); check(code == 0) { output }
+                }
                 withTimeoutOrNull(duration * 1000L) { run.stop.await() }
             }
             if (run.stop.isCompleted) state = "STOPPED"
@@ -238,7 +255,7 @@ class DiagnosticCoordinator(private val graph: EasylspApp) {
                 source(report, "exit-info", "UNAVAILABLE", "${if (!root) "未获得 root" else "未启动目标"}；未调用跨 UID 的普通 ActivityManager 接口")
                 source(report, "tombstones", "UNAVAILABLE", "${if (!root) "未获得 root" else "未启动目标"}；可导入目标 tombstone")
             }
-            if (configured) collectSource(report, "configuration_cleanup") { graph.framework.clearDiagnostic(key, run.row.id); "已移除本次早期配置；保存的插件启用状态未变" }
+            if (configured) collectSource(report, "configuration_cleanup") { if (zygisk) graph.nativeHost.call("clear-diagnostic", run.target.uid.toString(), run.target.packageName, run.row.id); if (javaConfigured) graph.framework.clearDiagnostic(key, run.row.id); "已移除本次早期配置；保存的插件启用状态未变" }
             // Import only this run's module events. The unfiltered system window stays a local attachment.
             val log = File(raw, "logcat-window.txt")
             var modeObserved = false
@@ -273,7 +290,7 @@ class DiagnosticCoordinator(private val graph: EasylspApp) {
             event(run, "collection_finished", JSONObject().put("state", state))
             run.row = run.row.copy(state = state, finishedAt = endWall)
             try { store.write(run.row, report) }
-            finally { active.remove(run.row.id); if (active.isEmpty()) DiagnosticService.finish(graph) }
+            finally { active.remove(run.row.id); run.ended.complete(Unit); if (active.isEmpty()) DiagnosticService.finish(graph) }
         } }
         if (state == "ERROR") 1 else 0
     }

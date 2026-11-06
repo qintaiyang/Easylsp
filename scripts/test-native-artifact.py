@@ -19,6 +19,14 @@ class ArtifactBoundaryTest(unittest.TestCase):
             file.flush()
             return validator.inspect(file.name)
 
+    def test_api31_matches_declaration_and_rejects_mislabelled_api34(self):
+        with tempfile.NamedTemporaryFile(suffix='.so') as file:
+            file.write(artifact)
+            file.flush()
+            self.assertEqual(31, validator.inspect(file.name, declared_min_api=31)['minApi'])
+            with self.assertRaisesRegex(ValueError, 'API 34'):
+                validator.inspect(file.name, declared_min_api=34)
+
     def test_wrong_architecture(self):
         data = bytearray(artifact)
         struct.pack_into('<H', data, 18, 62)

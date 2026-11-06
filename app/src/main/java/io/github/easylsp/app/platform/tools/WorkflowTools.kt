@@ -1,5 +1,6 @@
 package io.github.easylsp.app.platform.tools
 
+import io.github.easylsp.app.util.readUpTo
 import android.content.Intent
 import io.github.easylsp.app.EasylspApp
 import io.github.easylsp.app.platform.root.RootCommand
@@ -31,7 +32,7 @@ class WorkflowTools(private val graph: EasylspApp) {
         fun logFilter(args: JSONObject): (JSONObject) -> Boolean {
             val pluginId = if (args.has("pluginId")) plugin(args).id else null
             val sessionId = args.optString("sessionId")
-            return { row -> row.optString("packageName") == project.packageName && (pluginId == null || row.optString("pluginId") == pluginId) && (sessionId.isEmpty() || row.optString("sessionId") == sessionId) }
+            return { row -> row.optInt("uid", 0) / 100000 == project.userId && row.optString("packageName") == project.packageName && (pluginId == null || row.optString("pluginId") == pluginId) && (sessionId.isEmpty() || row.optString("sessionId") == sessionId) }
         }
         add("start_native_diagnostic", "Start a bounded startup evidence collection BEFORE launching this project's app. mode: EXTERNAL_ONLY (default, preserves runtime behavior), ENTRY_ONLY, NATIVE_OBSERVE (built-in observation only; no user native/Java plugins), JAVA_NO_PLUGINS (Java initialization only; no user native plugins), NORMAL (published native policy and enabled Java plugins). ENTRY_ONLY loads neither engine nor Java hooks. processName: package or package:child, or * (default). restart=true explicitly force-stops all target processes before launch; required for entry comparison modes. Returns diagnosticRunId/executionId immediately; does not require a session. NATIVE_OBSERVE requires root and framework scope already enabled; read actual nativeEngine/probe outcomes and native-events.jsonl. Optional sampleRevision pins this run to an explicitly captured sample; after capture_sample pass its returned revision because the conversation binding stays unchanged.",
             mapOf("mode" to "string", "processName" to "string", "durationSeconds" to "integer", "restart" to "boolean", "sampleRevision" to "integer"), writes = true) { args ->
@@ -91,31 +92,35 @@ class WorkflowTools(private val graph: EasylspApp) {
             JSONObject().put("skillId", item.id).put("name", item.name)
         }
         add("list_target_sessions", "Read framework activation, root and all connected processes for the project; choose a sessionId for inspection or plugin actions.") {
-            JSONObject().put("framework", graph.framework.state.value.description).put("root", graph.root.state.value.detail).put("sessions", JSONArray(graph.bridge.sessions.value.values.filter { it.packageName == project.packageName }.map { JSONObject().put("id", it.id).put("processName", it.processName).put("pid", it.pid) }))
+            JSONObject().put("framework", graph.framework.state.value.description).put("root", graph.root.state.value.detail).put("sessions", JSONArray(graph.bridge.sessions.value.values.filter { it.uid / 100000 == project.userId && it.packageName == project.packageName }.map { JSONObject().put("id", it.id).put("processName", it.processName).put("pid", it.pid) }))
         }
         add("start_target", "Launch the selected app. restart=true force-stops its old processes first. Native execution does not require a Java session; query get_native_plugin_status after launch.", mapOf("restart" to "boolean"), writes = true) { args ->
             require(project.kind == "INSTALLED") { "导入 APK 仅支持静态分析" }
             if (args.optBoolean("restart")) {
                 require(graph.root.useRoot()) { "重启目标需要已授予的 root" }
                 val output = StringBuilder()
-                val result = graph.executions.runner.execute(java.util.UUID.randomUUID().toString(), listOf(graph.root.su, "-c", "am force-stop ${RootCommand.quote(project.packageName)}"), graph.filesDir, closeInput = true) { output.append(it) }
+                val result = graph.executions.runner.execute(java.util.UUID.randomUUID().toString(), listOf(graph.root.su, "-c", "am force-stop --user ${project.userId} ${RootCommand.quote(project.packageName)}"), graph.filesDir, closeInput = true) { output.append(it) }
                 check(result.exitCode == 0) { output.toString() }
             }
-            val intent = requireNotNull(graph.packageManager.getLaunchIntentForPackage(project.packageName)) { "目标无启动入口" }
-            if (args.optBoolean("restart")) {
+            val sameUser = project.userId == android.os.Process.myUid() / 100000
+            if (args.optBoolean("restart") || !sameUser) {
+                require(graph.root.useRoot()) { "跨用户启动需要root" }
                 val output = StringBuilder()
-                val result = graph.executions.runner.execute(java.util.UUID.randomUUID().toString(), listOf(graph.root.su, "-c", "am start -W -n ${RootCommand.quote(requireNotNull(intent.component).flattenToString())}"), graph.filesDir, closeInput = true) { output.append(it) }
+                val result = graph.executions.runner.execute(java.util.UUID.randomUUID().toString(), listOf(graph.root.su, "-c", "am start --user ${project.userId} -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p ${RootCommand.quote(project.packageName)}"), graph.filesDir, closeInput = true) { output.append(it) }
                 check(result.exitCode == 0 && !output.contains("Error:")) { output.toString() }
-            } else graph.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            } else {
+                val intent = requireNotNull(graph.packageManager.getLaunchIntentForPackage(project.packageName)) { "目标无启动入口" }
+                graph.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
             if (graph.store.nativePlugins.published(project.id)?.policy == "NATIVE_ONLY") return@add JSONObject().put("started", true).put("restarted", args.optBoolean("restart")).put("note", "NATIVE_ONLY 不建立 Java session；查询 native 插件实际实例和目标行为")
             graph.sendBroadcast(Intent("io.github.easylsp.RECONNECT").setPackage(project.packageName))
-            val connected = withTimeoutOrNull(10000) { graph.bridge.sessions.first { rows -> rows.values.any { it.packageName == project.packageName } } }
-            JSONObject().put("started", true).put("sessions", JSONArray(connected?.values?.filter { it.packageName == project.packageName }?.map { JSONObject().put("sessionId", it.id).put("processName", it.processName) } ?: emptyList<JSONObject>())).put("note", if (connected == null) "目标启动请求已发出，尚无 Java session；这不能判定 native 是否执行" else "目标已连接")
+            val connected = withTimeoutOrNull(10000) { graph.bridge.sessions.first { rows -> rows.values.any { it.uid / 100000 == project.userId && it.packageName == project.packageName } } }
+            JSONObject().put("started", true).put("sessions", JSONArray(connected?.values?.filter { it.uid / 100000 == project.userId && it.packageName == project.packageName }?.map { JSONObject().put("sessionId", it.id).put("processName", it.processName) } ?: emptyList<JSONObject>())).put("note", if (connected == null) "目标启动请求已发出，尚无 Java session；这不能判定 native 是否执行" else "目标已连接")
         }
         add("reconnect_target", "Reconnect the running project target; read sessions after this action.", writes = true) { graph.sendBroadcast(Intent("io.github.easylsp.RECONNECT").setPackage(project.packageName)); JSONObject().put("requested", true) }
         for (restart in listOf(false, true)) add(if (restart) "restart_target" else "stop_target", "${if (restart) "Restart" else "Force stop"} the target app using device root. This ends all of its processes.", writes = true) {
             require(project.kind == "INSTALLED"); require(graph.root.useRoot()) { "需要在设备 root 管理器授权" }
-            val output = StringBuilder(); val result = graph.executions.runner.execute(java.util.UUID.randomUUID().toString(), listOf(graph.root.su, "-c", "am force-stop ${RootCommand.quote(project.packageName)}"), graph.filesDir, closeInput = true) { output.append(it) }
+            val output = StringBuilder(); val result = graph.executions.runner.execute(java.util.UUID.randomUUID().toString(), listOf(graph.root.su, "-c", "am force-stop --user ${project.userId} ${RootCommand.quote(project.packageName)}"), graph.filesDir, closeInput = true) { output.append(it) }
             require(result.exitCode == 0) { output.toString() }
             if (restart) graph.startActivity(requireNotNull(graph.packageManager.getLaunchIntentForPackage(project.packageName)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             JSONObject().put("stopped", true).put("restarted", restart)
@@ -144,15 +149,15 @@ class WorkflowTools(private val graph: EasylspApp) {
         }
         add("delete_plugin", "Unload all running project instances then delete this plugin and its files.", mapOf("pluginId" to "string"), listOf("pluginId"), true) { args ->
             val item = plugin(args)
-            if (item.runtime == "NATIVE") graph.nativeDeployments.disable(item)
-            else graph.bridge.sessions.value.values.filter { it.packageName == project.packageName && graph.bridge.instances.value["${it.id}/${item.id}"]?.state == "RUNNING" }.forEach { graph.bridge.commandSession(it.id, "unloadPlugin", item.id) }
+            if (item.runtime == "NATIVE" && project.kind == "INSTALLED") graph.nativeDeployments.disable(item)
+            else graph.bridge.sessions.value.values.filter { it.uid / 100000 == project.userId && it.packageName == project.packageName && graph.bridge.instances.value["${it.id}/${item.id}"]?.state == "RUNNING" }.forEach { graph.bridge.commandSession(it.id, "unloadPlugin", item.id) }
             graph.store.delete(item.id); JSONObject().put("deleted", true)
         }
         add("list_plugin_libraries", "List saved DEX/APK dependencies for a plugin revision.", mapOf("pluginId" to "string"), listOf("pluginId")) { args -> JSONObject().put("libraries", JSONArray(graph.store.libraries(plugin(args)).map { it.name })) }
         add("add_plugin_library", "Attach a DEX/APK file from this project workspace as a new plugin revision. JAR/AAR conversion is separate. Explicit reload loads dependencies in an isolated class loader.", mapOf("pluginId" to "string", "path" to "string"), listOf("pluginId", "path"), true) { args ->
             val item = plugin(args); val base = graph.executions.directory(binding.workspace.id); val file = File(base, args.getString("path")).canonicalFile
             require(file.path.startsWith(base.canonicalPath + File.separator)) { "依赖文件必须位于项目空间" }
-            val bytes = file.inputStream().use { it.readNBytes(16 * 1024 * 1024 + 1) }; val next = graph.store.addLibrary(item.id, file.name, bytes)
+            val bytes = file.inputStream().use { it.readUpTo(16 * 1024 * 1024 + 1) }; val next = graph.store.addLibrary(item.id, file.name, bytes)
             JSONObject().put("revision", next.revision).put("library", file.name)
         }
         add("remove_plugin_library", "Remove a DEX/APK dependency in a new saved revision; running instance changes only after reload.", mapOf("pluginId" to "string", "name" to "string"), listOf("pluginId", "name"), true) { args -> val item = plugin(args); graph.store.removeLibrary(item.id, args.getString("name")); JSONObject().put("saved", true) }

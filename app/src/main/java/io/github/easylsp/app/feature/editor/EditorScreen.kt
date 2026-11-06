@@ -51,7 +51,7 @@ import io.github.rosemoe.sora.widget.schemes.EditorColorScheme
     if (d == null) { LoadingState("正在恢复文件和草稿…"); return }
     fun save(after: () -> Unit = {}) { vm.action {
         if (plugin.runtime == "BEANSHELL" && d.process != plugin.processName) {
-            val host = vm.graph.bridge.session(project.packageName, plugin.processName.ifEmpty { project.packageName })
+            val host = vm.graph.bridge.session(project.packageName, plugin.processName.ifEmpty { project.packageName }, project.userId)
             if (host != null) vm.graph.bridge.commandSession(host.id, "unloadPlugin", plugin.id)
         }
         editorVM.save(plugin); after(); if (plugin.runtime == "NATIVE") "已保存新 revision；构建并发布后下次启动生效" else "已保存新 revision；显式加载或重载后生效"

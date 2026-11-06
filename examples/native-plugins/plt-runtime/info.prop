@@ -1,0 +1,11 @@
+formatVersion=2
+runtime=native
+nativeApiVersion=1
+apiVersion=1
+name=Caller PLT and runtime tasks
+version=1.0
+entry=src/main.c
+abi=arm64-v8a
+minApi=31
+processScope=exact
+processName=io.github.easylsp.demo

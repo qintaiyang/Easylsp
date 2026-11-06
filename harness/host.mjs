@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
-import { mkdir, readFile, rename, writeFile, cp } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile, cp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { availableParallelism, totalmem } from 'node:os';
 import { Extensions } from './extensions.mjs';
@@ -160,6 +160,12 @@ export async function startHost({ token, directory, port = 0, concurrency = Math
     if (method === 'session/open' || method === 'child/open') return open(params);
     // Legacy callers use the same registry and scheduler during migration.
     if (method.startsWith('child/')) method = method.replace('child/', 'session/');
+    if (method === 'session/remove-history') {
+      validId(params.sessionId);
+      if (sessions.has(params.sessionId)) throw new Error('Close the session before removing history');
+      await rm(join(directory, params.sessionId), { recursive: true, force: true });
+      return {};
+    }
     const s = record(params.sessionId);
     if (method === 'session/state') return state(s.id);
     if (method === 'session/close') { await cancelTree(s.id); if ((await state(s.id)).status === 'running') await s.runtime.rpc('session/wait', { sessionId: s.id }); await s.runtime.close(); sessions.delete(s.id); return {}; }

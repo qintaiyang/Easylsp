@@ -33,8 +33,9 @@ class WorkspaceExecution(private val root: File, val runner: CommandRunner = Com
     fun requireRecord(projectId: String, id: String): ExecutionRecord = store.records.value.firstOrNull { it.id == id && it.workspaceId == projectId } ?: error("执行记录不属于当前项目")
     fun start(projectId: String, kind: String, title: String, work: suspend (String, (String) -> Unit) -> Int): String {
         val id = UUID.randomUUID().toString()
-        store.save(ExecutionRecord(id, projectId, kind, title, "RUNNING", workspaceScope = workspace(projectId).scope))
-        val job = scope.launch(start = CoroutineStart.LAZY) {
+        val owner = ExecutionOwner.conversation.get()
+        store.save(ExecutionRecord(id, projectId, kind, title, "RUNNING", workspaceScope = workspace(projectId).scope, conversationId = owner))
+        val job = scope.launch(ExecutionOwner.conversation.asContextElement(owner), start = CoroutineStart.LAZY) {
             var state = "COMPLETE"; var exit: Int? = null
             try { exit = work(id) { store.append(id, it) }; if (exit != 0) state = "ERROR" }
             catch (error: TimeoutCancellationException) { state = "TIMEOUT"; store.append(id, "\n执行超时\n") }
@@ -65,5 +66,17 @@ class WorkspaceExecution(private val root: File, val runner: CommandRunner = Com
         return store.page(projectId, id, 0, 12000)
     }
     fun stop(projectId: String, id: String) { requireRecord(projectId, id); val job = jobs[id]; if (job != null) job.cancel() else ptyStop?.invoke(projectId, id) }
+    suspend fun stopConversation(id: String) {
+        val owned = store.records.value.filter { it.conversationId == id && it.state == "RUNNING" }
+        owned.forEach { stop(it.workspaceId, it.id) }
+        owned.forEach { jobs[it.id]?.join() }
+        check(store.records.value.none { it.conversationId == id && it.state == "RUNNING" }) { "此会话仍有未确认停止的执行" }
+    }
+    suspend fun stopWorkspace(id: String) {
+        val owned = store.records.value.filter { it.workspaceId == id && it.state == "RUNNING" }
+        owned.forEach { stop(id, it.id) }
+        owned.forEach { jobs[it.id]?.join() }
+        check(store.records.value.none { it.workspaceId == id && it.state == "RUNNING" }) { "仍有未确认停止的执行记录" }
+    }
     fun input(projectId: String, id: String, text: String, close: Boolean) { requireRecord(projectId, id); if (ptyInput?.invoke(projectId, id, text, close) == true) return; runner.write(id, text); if (close) runner.closeInput(id) }
 }

@@ -5,7 +5,7 @@ import org.json.JSONObject
 import java.io.File
 import java.util.UUID
 
-data class ExecutionRecord(val id: String, val workspaceId: String, val kind: String, val title: String, val state: String, val output: String = "", val exitCode: Int? = null, val startedAt: Long = System.currentTimeMillis(), val workspaceScope: String = "PROJECT") {
+data class ExecutionRecord(val id: String, val workspaceId: String, val kind: String, val title: String, val state: String, val output: String = "", val exitCode: Int? = null, val startedAt: Long = System.currentTimeMillis(), val workspaceScope: String = "PROJECT", val conversationId: String? = null) {
     val projectId: String? get() = workspaceId.takeIf { workspaceScope == "PROJECT" }
 }
 class ExecutionStore(private val root: File) {
@@ -13,7 +13,7 @@ class ExecutionStore(private val root: File) {
     init {
         root.mkdirs()
         records.value = root.listFiles().orEmpty().filter { it.extension == "json" }.map { file ->
-            val row = JSONObject(file.readText()); ExecutionRecord(row.getString("id"), row.optString("workspaceId", row.optString("projectId")), row.getString("kind"), row.getString("title"), row.getString("state").let { if (it == "RUNNING") "INTERRUPTED" else it }, exitCode = if (row.isNull("exitCode")) null else row.getInt("exitCode"), startedAt = row.getLong("startedAt"), workspaceScope = row.optString("workspaceScope", "PROJECT"))
+            val row = JSONObject(file.readText()); ExecutionRecord(row.getString("id"), row.optString("workspaceId", row.optString("projectId")), row.getString("kind"), row.getString("title"), row.getString("state").let { if (it == "RUNNING") "INTERRUPTED" else it }, exitCode = if (row.isNull("exitCode")) null else row.getInt("exitCode"), startedAt = row.getLong("startedAt"), workspaceScope = row.optString("workspaceScope", "PROJECT"), conversationId = row.optString("conversationId").ifEmpty { null })
         }.sortedByDescending { it.startedAt }
         records.value.filter { it.state == "INTERRUPTED" }.forEach(::save)
     }
@@ -21,7 +21,7 @@ class ExecutionStore(private val root: File) {
     fun file(id: String): File { checkId(id); return File(root, "$id.log") }
     @Synchronized fun save(row: ExecutionRecord) {
         checkId(row.id)
-        File(root, "${row.id}.json").writeText(JSONObject().put("id", row.id).put("workspaceId", row.workspaceId).put("workspaceScope", row.workspaceScope).put("kind", row.kind).put("title", row.title).put("state", row.state).put("exitCode", row.exitCode ?: JSONObject.NULL).put("startedAt", row.startedAt).toString())
+        File(root, "${row.id}.json").writeText(JSONObject().put("id", row.id).put("workspaceId", row.workspaceId).put("workspaceScope", row.workspaceScope).put("conversationId", row.conversationId ?: JSONObject.NULL).put("kind", row.kind).put("title", row.title).put("state", row.state).put("exitCode", row.exitCode ?: JSONObject.NULL).put("startedAt", row.startedAt).toString())
         records.update { list -> (list.filter { it.id != row.id } + row).sortedByDescending { it.startedAt } }
     }
     @Synchronized fun append(id: String, text: String) {
@@ -37,6 +37,11 @@ class ExecutionStore(private val root: File) {
         rows.forEach { row -> File(root, "${row.id}.json").delete(); file(row.id).delete() }
         records.value = records.value.filter { row -> rows.none { it.id == row.id } }
         return rows.size
+    }
+    @Synchronized fun clearConversation(conversationId: String) {
+        val owned = records.value.filter { it.conversationId == conversationId && it.state != "RUNNING" }
+        owned.forEach { File(root, "${it.id}.json").delete(); file(it.id).delete() }
+        records.value = records.value.filter { row -> owned.none { it.id == row.id } }
     }
     fun page(projectId: String, id: String, offset: Int, limit: Int): JSONObject {
         val row = records.value.firstOrNull { it.id == id && it.workspaceId == projectId } ?: error("执行记录不属于当前项目")

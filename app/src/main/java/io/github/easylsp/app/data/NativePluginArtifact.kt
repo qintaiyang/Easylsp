@@ -6,7 +6,7 @@ import java.nio.ByteOrder
 
 /** The native ZIP acceptance boundary; build artifacts are checked by the SDK compiler task. */
 object NativePluginArtifact {
-    fun validate(bytes: ByteArray) {
+    fun validate(bytes: ByteArray, declaredMinApi: Int) {
         require(bytes.size in 64..16 * 1024 * 1024) { "native SO 上限 16 MiB" }
         val elf = NativeElf.read(bytes.size.toLong()) { offset, count -> bytes.copyOfRange(offset.toInt(), offset.toInt() + count) }
         require(elf.type == 3 && elf.loads.isNotEmpty()) { "native 插件必须为 AArch64 ET_DYN" }
@@ -39,7 +39,7 @@ object NativePluginArtifact {
                 } }
             }
         }
-        require(api == 34) { "native 首版要求 Android API 34 note，实际 $api" }
+        require(api == declaredMinApi) { "ELF Android API note 与声明不一致：实际 $api，声明 $declaredMinApi" }
         fun value(tag: Long) = requireNotNull(dynamic[tag]?.singleOrNull()) { "缺少或重复 ELF 动态项 $tag" }
         val stringSize = value(10); val strings = address(value(5), stringSize)
         fun string(index: Long): String {

@@ -13,6 +13,7 @@ class NativeInstanceStore(private val graph: EasylspApp) {
         UUID.fromString(projectId)
         return File(graph.filesDir, "native-instances/$projectId/events.jsonl")
     }
+    @Synchronized fun clearProject(projectId: String) { file(projectId).parentFile!!.deleteRecursively() }
     @Synchronized fun events(projectId: String): List<JSONObject> = file(projectId).takeIf { it.exists() }?.readLines()?.filter { it.isNotBlank() }?.map(::JSONObject).orEmpty()
     @Synchronized fun append(projectId: String, incoming: List<JSONObject>) {
         if (incoming.isEmpty()) return
@@ -50,7 +51,17 @@ class NativeInstanceStore(private val graph: EasylspApp) {
         val project = requireNotNull(graph.store.dao.project(projectId))
         if (project.kind != "INSTALLED") return JSONObject().put("collected", false).put("reason", "静态项目尚未发布到已安装目标")
         if (!graph.root.useRoot()) return JSONObject().put("collected", false).put("reason", "读取独立 native 日志需要已授予的 root；保留已有证据")
-        val uid = graph.packageManager.getApplicationInfo(project.packageName, 0).uid
+        val uid = requireNotNull(graph.targetApplications.info(project.packageName, project.userId).applicationInfo).uid
+        if (project.nativeBackend == "ZYGISK") {
+            val result = if (graph.store.dao.plugins(projectId).any { it.nativeProcessType != "app" }) graph.nativeHost.call("events", uid.toString(), "isolated") else graph.nativeHost.call("events", uid.toString())
+            val incoming = result.getJSONArray("events")
+            val rows = (0 until incoming.length()).map { incoming.getJSONObject(it) }.filter { event ->
+                val build = graph.store.nativePlugins.build(event.getString("buildId"))
+                build?.projectId == projectId && build.pluginId == event.getString("pluginId")
+            }
+            append(projectId, rows.map { it.put("source", "host-direct") })
+            return result.put("collected", true).put("eventsRead", rows.size).put("note", "直接读取存活进程的有界事件缓冲；没有事件不等于未执行，退出进程需诊断采集")
+        }
         val text = StringBuilder()
         val result = graph.executions.runner.execute(UUID.randomUUID().toString(), listOf(graph.root.su, "-c", "logcat -d -t 2000 -v raw --uid=$uid -s EasylspNative:I '*:S'"), graph.filesDir, closeInput = true, timeoutSeconds = 15) { text.append(it) }
         check(result.exitCode == 0) { "native 日志读取失败：$text" }
@@ -90,7 +101,9 @@ class NativeInstanceStore(private val graph: EasylspApp) {
                 .put("hooks", JSONArray(hooks)).put("dropped", latest.getLong("dropped"))
                 .put("liveness", "NOT_CHECKED").put("sources", JSONArray(list.flatMap { event -> val sources = event.optJSONArray("sources"); (0 until (sources?.length() ?: 0)).map { sources!!.getJSONObject(it) } }.distinctBy { it.toString() }))
         }
-        val current = if (graph.framework.state.value.active && publication != null) graph.framework.nativeSnapshot("${publication.uid}:${publication.packageName}")?.let(::JSONObject) else null
+        val project = requireNotNull(graph.store.dao.project(plugin.projectId))
+        val current = if (project.nativeBackend == "ZYGISK" && publication != null) graph.nativeHost.current(publication.uid, publication.packageName)?.let(graph.nativeHost::canonical)
+            else if (graph.framework.state.value.active && publication != null) graph.framework.nativeSnapshot("${publication.uid}:${publication.packageName}")?.let(::JSONObject) else null
         return JSONObject().put("pluginId", plugin.id).put("runtime", "NATIVE").put("sourceRevision", plugin.revision)
             .put("builds", JSONArray(builds)).put("published", published ?: JSONObject.NULL).put("generation", publication?.generation ?: JSONObject.NULL)
             .put("frameworkGeneration", current?.getString("generation") ?: JSONObject.NULL).put("policy", publication?.policy ?: "JAVA_ONLY")

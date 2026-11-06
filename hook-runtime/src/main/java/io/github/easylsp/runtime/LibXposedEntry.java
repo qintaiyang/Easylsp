@@ -22,6 +22,7 @@ public final class LibXposedEntry extends XposedModule {
         if (!info.isFirstPackage() || diagnosticConfigFailed) return;
         diagnostic.event("package_loaded");
         if (diagnostic.mode.equals("NATIVE_OBSERVE")) {
+            if (diagnostic.backend.equals("ZYGISK")) return;
             try {
                 int result = io.github.easylsp.nativeengine.NativeRuntime.start(diagnostic.nativeSocket);
                 diagnostic.event("native_start_result", "code=" + result);
@@ -42,7 +43,7 @@ public final class LibXposedEntry extends XposedModule {
                 try (android.os.ParcelFileDescriptor fd = openRemoteFile(plugin.getString("remoteFile"))) {
                     int code = io.github.easylsp.nativeengine.NativeRuntime.loadPlugin(fd.getFd(),
                         plugin.getString("pluginId"), plugin.getString("buildId"), instance, info.getPackageName(),
-                        processName, config.generation, plugin.getLong("sourceRevision"), plugin.optString("config", "{}"));
+                        processName, config.generation, plugin.getLong("sourceRevision"), plugin.optString("config", "{}"), plugin.isNull("releaseId") ? "" : plugin.optString("releaseId", ""));
                     android.util.Log.i("EasylspNative", "native_plugin_result instanceId=" + instance + " buildId=" + plugin.getString("buildId") + " code=" + code);
                     diagnostic.event("native_plugin_result", "instanceId=" + instance + ";code=" + code);
                 } catch (Throwable error) {

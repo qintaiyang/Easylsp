@@ -9,3 +9,7 @@ dependencyResolutionManagement {
 }
 rootProject.name = "Easylsp"
 include(":native-runtime", ":terminal-component", ":app", ":hook-runtime", ":plugin-api", ":demo-target", ":standalone-template")
+
+include(":zygisk-host")
+
+include(":native-entry")

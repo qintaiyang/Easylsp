@@ -15,7 +15,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--serial', default='127.0.0.1:15555')
+parser.add_argument('--serial', required=True)
 parser.add_argument('--output', default='/tmp/easylsp-phase3-process-recovery')
 args = parser.parse_args()
 adb = ['adb', '-s', args.serial]

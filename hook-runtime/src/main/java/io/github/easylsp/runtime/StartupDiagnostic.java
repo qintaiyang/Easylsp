@@ -13,6 +13,7 @@ final class StartupDiagnostic {
     final String runId;
     final String mode;
     String nativeSocket;
+    String backend = "LIBXPOSED";
     StartupDiagnostic(String runId, String mode) { this.runId = runId; this.mode = mode; }
 
     static StartupDiagnostic read(SharedPreferences preferences, String processName) throws Exception {
@@ -27,6 +28,7 @@ final class StartupDiagnostic {
         String mode = config.getString("mode");
         if (!mode.equals("ENTRY_ONLY") && !mode.equals("JAVA_NO_PLUGINS") && !mode.equals("NORMAL") && !mode.equals("NATIVE_OBSERVE")) throw new IllegalArgumentException("Unknown diagnostic mode " + mode);
         StartupDiagnostic result = new StartupDiagnostic(config.getString("diagnosticRunId"), mode);
+        result.backend = config.optString("backend", "LIBXPOSED");
         if (mode.equals("NATIVE_OBSERVE")) result.nativeSocket = config.getString("nativeSocket");
         return result;
     }

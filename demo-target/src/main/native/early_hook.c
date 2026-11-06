@@ -2,14 +2,20 @@
 #include <jni.h>
 #include <errno.h>
 
+extern int easylsp_demo_intercept_value(int);
+extern double easylsp_demo_float_value(double);
 static int constructor_result;
 /* A real, public C signature; no inline folding into the constructor. */
 __attribute__((visibility("default"), noinline)) int easylsp_demo_early_value(int value) {
     errno = EDOM;
     return value + 1;
 }
+__attribute__((visibility("default"), noinline)) int easylsp_demo_recursive(int value) {
+    return value <= 0 ? 1 : easylsp_demo_recursive(value - 1) + value;
+}
 __attribute__((constructor)) static void initialize(void) {
     constructor_result = easylsp_demo_early_value(7);
+    __android_log_print(ANDROID_LOG_INFO, "EasylspDemoNative", "intercept integer=%d float=%.1f", easylsp_demo_intercept_value(7), easylsp_demo_float_value(2.0));
     __android_log_print(ANDROID_LOG_INFO, "EasylspDemoNative", "constructor result=%d errno=%d", constructor_result, errno);
 }
 JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {

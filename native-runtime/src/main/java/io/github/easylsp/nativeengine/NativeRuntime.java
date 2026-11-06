@@ -14,14 +14,14 @@ public final class NativeRuntime {
     public static synchronized int start(String socketName) { loadLibraries(); return startObservation(socketName); }
     /** The caller owns the FD and closes it after this synchronous call returns. No dlclose at runtime. */
     public static synchronized int loadPlugin(int fd, String pluginId, String buildId, String instanceId,
-            String packageName, String processName, String generation, long sourceRevision, String config) {
+            String packageName, String processName, String generation, long sourceRevision, String config, String releaseId) {
         loadLibraries();
-        return loadPluginFd(fd, pluginId, buildId, instanceId, packageName, processName, generation, sourceRevision, config);
+        return loadPluginFd(fd, pluginId, buildId, instanceId, packageName, processName, generation, sourceRevision, config, releaseId);
     }
     public static synchronized String[] bufferedEvents() { return librariesLoaded ? readEvents() : new String[0]; }
     public static native String[] readEvents();
     private static native int initializeEngine();
     private static native int startObservation(String socketName);
     private static native int loadPluginFd(int fd, String pluginId, String buildId, String instanceId,
-            String packageName, String processName, String generation, long sourceRevision, String config);
+            String packageName, String processName, String generation, long sourceRevision, String config, String releaseId);
 }

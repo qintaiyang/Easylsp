@@ -33,12 +33,12 @@ class BridgeHub(private val context: Context, private val store: ProjectStore, p
             if (pid != Binder.getCallingPid()) throw SecurityException("PID 不匹配")
             if (context.packageManager.getPackagesForUid(uid)?.contains(packageName) != true) throw SecurityException("包名不属于当前 UID")
             if (processName != packageName && !processName.startsWith("$packageName:")) throw SecurityException("进程不属于目标应用")
-            runBlocking(Dispatchers.IO) { if (store.dao.projectByPackage(packageName) == null) throw SecurityException("请先在管理端选择目标应用") }
+            runBlocking(Dispatchers.IO) { if (store.dao.projectByPackage(packageName, uid / 100000) == null) throw SecurityException("请先在管理端选择目标应用") }
             val id = UUID.randomUUID().toString()
             val death = IBinder.DeathRecipient { disconnect(id) }
             callback.asBinder().linkToDeath(death, 0)
             synchronized(this@BridgeHub) {
-                sessions.value.values.filter { it.packageName == packageName && it.processName == processName }.forEach { disconnect(it.id) }
+                sessions.value.values.filter { it.uid == uid && it.packageName == packageName && it.processName == processName }.forEach { disconnect(it.id) }
                 sessions.update { it + (id to Session(id, packageName, processName, pid, uid, callback, death)) }
             }
             diagnosticEvent(Session(id, packageName, processName, pid, uid, callback, death), "session_registered")
@@ -47,7 +47,7 @@ class BridgeHub(private val context: Context, private val store: ProjectStore, p
         override fun listPlugins(sessionId: String): MutableList<Bundle> {
             val session = ownSession(sessionId)
             return runBlocking(Dispatchers.IO) {
-                val project = requireNotNull(store.dao.projectByPackage(session.packageName))
+                val project = requireNotNull(store.dao.projectByPackage(session.packageName, session.uid / 100000))
                 store.dao.plugins(project.id).filter { it.runtime == "BEANSHELL" && PluginProcesses.matches(it, session.packageName, session.processName) }.map { plugin -> Bundle().apply {
                     putString("runtime", plugin.runtime); putString("pluginId", plugin.id); putLong("revision", plugin.revision); putBoolean("desiredEnabled", plugin.desiredEnabled)
                 } }.toMutableList()
@@ -56,7 +56,7 @@ class BridgeHub(private val context: Context, private val store: ProjectStore, p
         override fun openPlugin(sessionId: String, pluginId: String, revision: Long): ParcelFileDescriptor {
             val session = ownSession(sessionId)
             return runBlocking(Dispatchers.IO) {
-                val project = requireNotNull(store.dao.projectByPackage(session.packageName))
+                val project = requireNotNull(store.dao.projectByPackage(session.packageName, session.uid / 100000))
                 val plugin = store.dao.plugin(pluginId) ?: throw IllegalArgumentException("插件不存在")
                 if (plugin.runtime != "BEANSHELL" || plugin.projectId != project.id || !PluginProcesses.matches(plugin, session.packageName, session.processName)) throw SecurityException("不能读取其他项目或进程的插件")
                 ParcelFileDescriptor.open(store.sourceFile(plugin.copy(revision = revision)), ParcelFileDescriptor.MODE_READ_ONLY)
@@ -66,7 +66,7 @@ class BridgeHub(private val context: Context, private val store: ProjectStore, p
             val plugin = requireNotNull(store.dao.plugin(pluginId))
             require(plugin.runtime == "BEANSHELL") { "native 插件不使用 Java Binder 加载链路" }
             val project = requireNotNull(store.dao.project(plugin.projectId))
-            require(project.packageName == session.packageName && PluginProcesses.matches(plugin, session.packageName, session.processName)) { "插件不属于当前目标" }
+            require(project.packageName == session.packageName && project.userId == session.uid / 100000 && PluginProcesses.matches(plugin, session.packageName, session.processName)) { "插件不属于当前目标" }
             require(revision in 1..plugin.revision) { "不存在该插件版本" }
             return plugin.copy(revision = revision)
         }
@@ -119,14 +119,15 @@ class BridgeHub(private val context: Context, private val store: ProjectStore, p
     }
     private fun appendLog(session: Session, event: Bundle, level: String, message: String) {
         logs.append(JSONObject().put("timestamp", event.getLong("timestamp", System.currentTimeMillis())).put("packageName", session.packageName)
-            .put("processName", session.processName).put("pid", session.pid).put("sessionId", session.id)
+            .put("uid", session.uid).put("processName", session.processName).put("pid", session.pid).put("sessionId", session.id)
             .put("pluginId", event.getString("pluginId", "")).put("revision", event.getLong("revision"))
             .put("instanceId", event.getString("instanceId", "")).put("level", level).put("message", message.take(16000)))
     }
-    fun session(packageName: String, processName: String = packageName) = sessions.value.values.singleOrNull { it.packageName == packageName && it.processName == processName }
+    fun session(packageName: String, processName: String = packageName, userId: Int = android.os.Process.myUid() / 100000) = sessions.value.values.singleOrNull { it.uid / 100000 == userId && it.packageName == packageName && it.processName == processName }
     suspend fun command(packageName: String, operation: String, pluginId: String? = null): String {
         val plugin = withContext(Dispatchers.IO) { pluginId?.let { requireNotNull(store.dao.plugin(it)) } }
-        val targets = sessions.value.values.filter { it.packageName == packageName && if (plugin == null) it.processName == packageName else PluginProcesses.matches(plugin, packageName, it.processName) }
+        val user = withContext(Dispatchers.IO) { plugin?.let { requireNotNull(store.dao.project(it.projectId)).userId } } ?: android.os.Process.myUid() / 100000
+        val targets = sessions.value.values.filter { it.uid / 100000 == user && it.packageName == packageName && if (plugin == null) it.processName == packageName else PluginProcesses.matches(plugin, packageName, it.processName) }
         require(targets.isNotEmpty()) { "目标进程未连接" }
         return targets.map { "${it.processName}: ${commandSession(it.id, operation, pluginId)}" }.joinToString("\n")
     }
@@ -138,7 +139,7 @@ class BridgeHub(private val context: Context, private val store: ProjectStore, p
         val plugin = pluginId?.let { requireNotNull(store.dao.plugin(it)) { "插件不存在" } }
         if (plugin != null) {
             require(plugin.runtime == "BEANSHELL") { "native 请构建、发布明确 buildId 并重启；不支持 Java load/reload/unload" }
-            val project = requireNotNull(store.dao.projectByPackage(packageName))
+            val project = requireNotNull(store.dao.projectByPackage(packageName, session.uid / 100000))
             require(plugin.projectId == project.id && PluginProcesses.matches(plugin, packageName, session.processName)) { "插件不属于当前项目/进程" }
             if (operation == "loadPlugin" || operation == "reloadPlugin") require(plugin.desiredEnabled) { "请先启用插件配置" }
             args.putString("pluginId", plugin.id); args.putLong("revision", plugin.revision)

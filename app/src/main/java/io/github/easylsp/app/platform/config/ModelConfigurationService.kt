@@ -53,6 +53,7 @@ class ModelConfigurationService(private val graph: EasylspApp) {
     }
     fun secret(modelId: String) = graph.secrets.get(credential(resolve(modelId)))
     fun selected(conversation: ConversationEntity) = conversation.modelConfigId.ifEmpty { conversation.providerId }
+    fun clearProject(projectId: String) { preferences.edit().remove("project:$projectId").commit() }
     fun defaultModel(projectId: String?): String? {
         migrateConnections()
         val id = projectId?.let { preferences.getString("project:$it", null) } ?: preferences.getString("global", null)

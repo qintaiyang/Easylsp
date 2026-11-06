@@ -32,7 +32,7 @@ class TerminalSessions(private val graph: EasylspApp) {
         }
         override fun onTitleChanged(session: TerminalSession) { changed?.invoke(session) }
         override fun onSessionFinished(session: TerminalSession) {
-            val entry = entries.value.first { it.session === session }
+            val entry = entries.value.firstOrNull { it.session === session } ?: return
             finished[entry.id]?.complete(session.exitStatus)
             changed?.invoke(session)
         }
@@ -76,6 +76,18 @@ class TerminalSessions(private val graph: EasylspApp) {
         }
     }
     fun stop(projectId: String, id: String) { val entry = requireEntry(projectId, id); scope.launch { finish(entry) } }
+    suspend fun closeExecutions(ids: Set<String>) {
+        val owned = entries.value.filter { it.id in ids }
+        owned.forEach { finish(it) }
+        withContext(Dispatchers.Main) { entries.value = entries.value.filter { it.id !in ids } }
+        owned.forEach { finished.remove(it.id) }
+    }
+    suspend fun closeWorkspace(id: String) {
+        val owned = entries.value.filter { it.workspaceId == id }
+        owned.forEach { finish(it) }
+        withContext(Dispatchers.Main) { entries.value = entries.value.filter { it.workspaceId != id } }
+        owned.forEach { finished.remove(it.id) }
+    }
     suspend fun execute(projectId: String, id: String, command: List<String>, cwd: String, timeout: Int, output: (String) -> Unit): Int {
         val entry = create(projectId, command.joinToString(" "), command, id, cwd)
         try { return withTimeout(timeout * 1000L) { requireNotNull(finished[id]).await() } }

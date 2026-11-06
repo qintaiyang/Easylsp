@@ -99,7 +99,14 @@ class ChatEngine(private val graph: EasylspApp) {
         suspend fun interaction(kind: String, args: JSONObject): JSONObject {
             val turn = dao.turns(conversation.id).first { rows -> rows.lastOrNull()?.status == "RUNNING" }.last()
             dao.saveTurn(turn.copy(phase = if (kind == "QUESTION") "USER_QUESTION" else "USER_APPROVAL"))
-            return graph.interactions.request(conversation.id, turn.id, kind, args)
+            try { return graph.interactions.request(conversation.id, turn.id, kind, args) }
+            finally {
+                withContext(NonCancellable) {
+                    dao.turnHistory(conversation.id).firstOrNull { it.id == turn.id }?.takeIf {
+                        it.status == "RUNNING" && it.phase in setOf("USER_QUESTION", "USER_APPROVAL")
+                    }?.let { dao.saveTurn(it.copy(phase = "TOOL")) }
+                }
+            }
         }
         val binding = RunBinding(project, conversation.sampleRevision, mapping.targetSessionId, conversation.id) { interaction("QUESTION", it) }
         graph.executions.bind(binding.workspace)
@@ -109,7 +116,7 @@ class ChatEngine(private val graph: EasylspApp) {
             val reason = when {
                 !graph.tools.enabled(tool.name) -> "用户已停用此工具"
                 tool.name !in allowed -> "当前会话模式不提供此工具"
-                else -> null
+                else -> graph.tools.unavailableReason(tool, binding)
             }
             reason?.let { tool.name to it }
         }.toMap()
@@ -199,6 +206,23 @@ class ChatEngine(private val graph: EasylspApp) {
         else if (state != "running") activeConversation.value = null
     } }
 
+    /** Hold input admission for the whole deletion tree; recursive cleanup shares this lock. */
+    internal suspend fun <T> deletingConversations(action: suspend () -> T): T = inputDispatch.withLock { action() }
+
+    internal suspend fun quiesceConversation(id: String) {
+        completions.remove(id)?.cancelAndJoin()
+        val sessions = listOfNotNull(dao.harnessSession(id)?.sessionId) + dao.branchHistory(id).map { it.sessionId }
+        graph.interactions.cancelConversation(id)
+        if (sessions.isNotEmpty()) executionService().closeConversation(id, sessions.distinct())
+        graph.phone.release(id)
+        running.remove(id)
+        if (observing == id) {
+            display?.cancelAndJoin(); observing = null; mirror = null
+            activeConversation.value = null; statusConversation.value = null; liveAssistant.value = null
+        }
+        commandPreferences.edit().remove(id).commit()
+        maintenance.update { it - id }
+    }
     fun isRunning(conversationId: String) = conversationId in running
     fun stop(conversationId: String? = activeConversation.value) { scope.launch {
         val id = conversationId ?: return@launch
@@ -336,8 +360,8 @@ class ChatEngine(private val graph: EasylspApp) {
         running.add(input.conversationId)
         watch(input.conversationId, userId)
     }
-    internal fun admitted(params: JSONObject) {
-        val input = dao.input(params.getString("requestId")) ?: return
+    internal suspend fun admitted(params: JSONObject) = inputDispatch.withLock {
+        val input = dao.input(params.getString("requestId")) ?: return@withLock
         accepted(input, params)
     }
     private fun watch(conversationId: String, userId: Long) {
@@ -359,7 +383,7 @@ class ChatEngine(private val graph: EasylspApp) {
                 activeConversation.value = null
             }
             graph.agents.completed(conversationId)
-            if (turn?.status == "COMPLETE") scope.launch {
+            if (turn?.status == "COMPLETE") launch {
                 try { graph.memories.consolidate(requireNotNull(dao.conversation(conversationId))) }
                 catch (e: CancellationException) { throw e }
                 catch (e: Exception) { graph.memories.preferences.edit().putString("lastError", e.message).apply() }

@@ -18,8 +18,14 @@ jobs:
           packages: platform-tools
       - run: sdkmanager 'platforms;android-35' 'platforms;android-36' 'build-tools;35.0.0' 'build-tools;36.0.0' 'ndk;28.2.13676358' 'cmake;3.22.1'
       - uses: gradle/actions/setup-gradle@v4
-      - run: ./gradlew :app:assembleDebug :demo-target:assembleDebug :app:assembleDebugAndroidTest :hook-runtime:testDebugUnitTest :demo-target:testDebugUnitTest :app:testDebugUnitTest --console=plain --max-workers=2 -Pkotlin.compiler.execution.strategy=in-process
+      - run: ./gradlew :app:assembleDebug :demo-target:assembleDebug :app:assembleDebugAndroidTest :zygisk-host:assembleHost :hook-runtime:testDebugUnitTest :demo-target:testDebugUnitTest :app:testDebugUnitTest --console=plain --max-workers=2 -Pkotlin.compiler.execution.strategy=in-process
       - run: python3 scripts/verify-skill-migration.py
+      - run: python3 scripts/test-host-protocol.py
+      - run: python3 scripts/test-native-core.py
+      - run: python3 scripts/test-market.py
+      - run: python3 scripts/test-github-market.py
+      - run: python3 scripts/prepare-native-candidates.py --demo-lib demo-target/build/intermediates/merged_native_libs/debug/mergeDebugNativeLibs/out/lib/arm64-v8a/libdemo_early_hook.so
+      - run: python3 scripts/check-native-candidates.py
       - uses: actions/upload-artifact@v4
         with:
           name: easylsp-debug
@@ -27,4 +33,8 @@ jobs:
             app/build/outputs/apk/debug/*.apk
             demo-target/build/outputs/apk/debug/*.apk
             standalone-template/build/outputs/apk/debug/*.apk
+            app/build/outputs/apk/androidTest/debug/*.apk
+            zygisk-host/build/outputs/*.zip
+            build/native-candidates/
+            app/build/generated/nativeSdkApi31Assets/native-sdk/
           retention-days: 7

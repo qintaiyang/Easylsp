@@ -1,6 +1,7 @@
 package io.github.easylsp.app
 import android.app.Application
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.collect
 import io.github.easylsp.app.data.*
 import io.github.easylsp.app.platform.bridge.BridgeHub
 class EasylspApp : Application() {
@@ -10,10 +11,22 @@ class EasylspApp : Application() {
         super.onCreate()
         if (android.app.Application.getProcessName() == packageName) {
             CoroutineScope(SupervisorJob() + Dispatchers.IO).launch { models.migrateConnections(); skillPackages.installPresets() }
+            CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                root.state.collect { value ->
+                    if (value.granted && root.preferred.value) {
+                        try { managerKeepalive.reconcile() }
+                        catch (error: Exception) {
+                            if (error is CancellationException) throw error
+                            android.util.Log.e("EasylspKeepalive", "UID0 keeper setup failed", error)
+                        }
+                    }
+                }
+            }
             framework.connect()
             if (root.preferred.value) root.refresh()
         }
     }
+    val managerKeepalive by lazy { io.github.easylsp.app.platform.root.ManagerKeepalive(this) }
     val executions by lazy { io.github.easylsp.app.platform.terminal.WorkspaceExecution(filesDir, commandWrapper = root::wrap).apply {
         pty = { project, id, command, cwd, timeout, output -> terminals.execute(project, id, command, cwd, timeout, output) }
         ptyInput = { project, id, text, close -> if (terminals.entries.value.any { it.id == id }) { terminals.input(project, id, text + if (close) "\u0004" else ""); true } else false }
@@ -43,9 +56,17 @@ class EasylspApp : Application() {
     val analysis by lazy { io.github.easylsp.app.platform.analysis.AnalysisClient(this) }
     val nativeAnalysis by lazy { io.github.easylsp.app.platform.analysis.NativeAnalysis(this) }
     val nativeBuilds by lazy { io.github.easylsp.app.platform.nativeplugins.NativeBuildService(this) }
+    val github by lazy { io.github.easylsp.app.platform.market.GitHubAccount(this) }
+    val market by lazy { io.github.easylsp.app.platform.market.MarketService(this) }
+    val releasePublishing by lazy { io.github.easylsp.app.platform.market.ReleasePublishingService(this) }
+    val releaseActivation by lazy { io.github.easylsp.app.platform.market.ReleaseActivationService(this) }
+    val releasePreparations by lazy { io.github.easylsp.app.platform.market.ReleasePreparationService(this) }
+    val targetApplications by lazy { io.github.easylsp.app.platform.nativeplugins.TargetApplications(this) }
     val nativeDeployments by lazy { io.github.easylsp.app.platform.nativeplugins.NativeDeploymentPublisher(this) }
+    val nativeHost by lazy { io.github.easylsp.app.platform.nativeplugins.NativeHostClient(this) }
     val nativeInstances by lazy { io.github.easylsp.app.platform.nativeplugins.NativeInstanceStore(this) }
     val diagnostics by lazy { io.github.easylsp.app.platform.diagnostics.DiagnosticCoordinator(this) }
+    val localManagement by lazy { io.github.easylsp.app.platform.ai.LocalManagementService(this) }
     val storage by lazy { StorageManager(this) }
     val settings by lazy { SettingsStore(this) }
     val bridge by lazy { BridgeHub(this, store, logs) }

@@ -51,6 +51,12 @@ class ToolCatalog(private val graph: EasylspApp) {
             }
         }
     }
+    fun unavailableReason(tool: ToolDefinition, binding: RunBinding): String? = when {
+        tool.groupId.startsWith("project.") && binding.projectBinding == null -> "需要真实项目绑定；请从设备应用或导入 APK 项目进入会话。独立聊天仍可使用文件、终端和明确 pluginId 的发行工具。"
+        tool.groupId == "project.analysis" && binding.sampleRevision == 0L && tool.name !in setOf("capture_sample", "get_project_info") -> "需要先采集或导入 APK 样本。"
+        (tool.groupId == "project.inspection" || tool.name in setOf("load_plugin", "unload_plugin", "reload_plugin", "get_plugin_status", "plugin_action")) && binding.sessionId !in graph.bridge.sessions.value -> "需要本轮绑定的在线 Java 目标进程；请启用目标作用域、启动并连接目标后重新发送。Native 发布与会话文件/终端不需要 Java 会话。"
+        else -> null
+    }
     fun groupTools(): Map<String, List<String>> = groups.entries.groupBy({ it.value }, { it.key })
     private val defaultTools = setOf("search_tools", "select_tools", "list_skills", "read_skill", "ask_user", "read_tool_output", "update_plan")
     private val prefs = graph.getSharedPreferences("tool-settings", 0)
@@ -106,9 +112,9 @@ class ToolCatalog(private val graph: EasylspApp) {
             require(offset >= 0 && limit in 1..200) { "offset 必须 >= 0；limit 必须在 1..200 范围内" }
             JSONObject().put("pluginId", item.id).put("revision", item.revision).put("runtime", item.runtime).put("entry", item.entry).put("startLine", offset + 1).put("text", lines.drop(offset).take(limit).joinToString("\n")).put("nextOffset", if (offset + limit < lines.size) offset + limit else JSONObject.NULL)
         }
-        add("create_plugin", "Create a disabled plugin. runtime=BEANSHELL (default) or NATIVE; native uses C17 src/main.c. Read native-api before generating C with confirmed signatures.", mapOf("name" to "string", "source" to "string", "processName" to "string", "runtime" to "string"), listOf("name", "source"), true) { args ->
+        add("create_plugin", "Create a disabled plugin. runtime=BEANSHELL (default) or NATIVE; nativeEntry=src/main.c (C17, default) or src/main.cpp (C++17 with static STL). Read native-api; exceptions and STL objects stay inside the plugin.", mapOf("name" to "string", "source" to "string", "processName" to "string", "runtime" to "string", "nativeEntry" to "string"), listOf("name", "source"), true) { args ->
             val process = args.optString("processName", project.packageName)
-            val item = graph.store.create(project, args.getString("name"), args.getString("source"), processName = process, runtime = args.optString("runtime", "BEANSHELL").uppercase())
+            val item = graph.store.create(project, args.getString("name"), args.getString("source"), processName = process, runtime = args.optString("runtime", "BEANSHELL").uppercase(), nativeEntry = args.optString("nativeEntry", "src/main.c"))
             JSONObject().put("pluginId", item.id).put("revision", item.revision).put("runtime", item.runtime).put("entry", item.entry).put("enabled", false)
         }
         add("edit_plugin", "Save a new revision; does not change the running instance", mapOf("pluginId" to "string", "source" to "string"), listOf("pluginId", "source"), true,
@@ -148,13 +154,13 @@ class ToolCatalog(private val graph: EasylspApp) {
         add("read_tool_output", "Read a long result using its outputId and character cursor; scoped to this conversation", mapOf("outputId" to "string") + paging, listOf("outputId")) { args ->
             graph.toolOutputs.page(binding.conversationId, args.getString("outputId"), args.optInt("offset", 0), args.optInt("limit", 12000))
         }
-        add("read_development_reference", "Read before writing hooks. document: plugin-api/example for Java; native-api/native-header/native-symbol-example/native-vaddr-example/native-lifecycle-example/native-jni-example for C ABI and build; paged by line", mapOf("document" to "string") + paging, listOf("document")) { args ->
-            val path = when (args.getString("document")) { "plugin-api" -> "plugin-api.md"; "example" -> "replace-add/main.java"; "native-api" -> "native-sdk/native-plugin-api.md"; "native-header" -> "native-sdk/easylsp_native_plugin.h"; "native-symbol-example" -> "early-symbol/src/main.c"; "native-vaddr-example" -> "elf-vaddr/src/main.c"; "native-lifecycle-example" -> "module-lifecycle/src/main.c"; "native-jni-example" -> "jni-onload/src/main.c"; else -> error("未知开发参考 document") }
+        add("read_development_reference", "Read before writing hooks. document: plugin-api/example for Java; native-api/native-header/native-symbol-example/native-vaddr-example/native-lifecycle-example/native-jni-example/native-chain-example/native-register-example/native-intercept-example for C ABI and build; plugin-release for v3 local release preparation; paged by line", mapOf("document" to "string") + paging, listOf("document")) { args ->
+            val path = when (args.getString("document")) { "plugin-api" -> "plugin-api.md"; "example" -> "replace-add/main.java"; "plugin-release" -> "plugin-release.md"; "native-api" -> "native-sdk/native-plugin-api.md"; "native-header" -> "native-sdk/easylsp_native_plugin.h"; "native-symbol-example" -> "early-symbol/src/main.c"; "native-vaddr-example" -> "elf-vaddr/src/main.c"; "native-lifecycle-example" -> "module-lifecycle/src/main.c"; "native-jni-example" -> "jni-onload/src/main.c"; "native-chain-example" -> "chain-a/src/main.c"; "native-register-example" -> "jni-register/src/main.c"; "native-intercept-example" -> "instruction-intercept/src/main.c"; else -> error("未知开发参考 document") }
             val lines = graph.assets.open(path).bufferedReader().use { it.readLines() }
             val offset = args.optInt("offset", 0); val limit = args.optInt("limit", 100); require(offset >= 0 && limit in 1..200) { "offset 必须 >= 0；limit 必须在 1..200 范围内" }
             JSONObject().put("text", lines.drop(offset).take(limit).joinToString("\n")).put("nextOffset", if (offset + limit < lines.size) offset + limit else JSONObject.NULL)
         }
-        add("prepare_native_build_tools", "Prepare phone arm64 Clang/LLD and the Android API 34 target SDK. Separate from LLVM analysis tools. Returns executionId; read that execution without rerunning preparation.", writes = true) { graph.nativeBuilds.prepare(project.id) }
+        add("prepare_native_build_tools", "Prepare phone arm64 Clang/LLD and the Android API 31 target SDK. Separate from LLVM analysis tools. Returns executionId; read that execution without rerunning preparation.", writes = true) { graph.nativeBuilds.prepare(project.id) }
         add("build_native_plugin", "Compile a fixed saved C sourceRevision with Android headers and system libraries. No target session needed. Returns buildId/executionId; compiler success is not runtime evidence.", mapOf("pluginId" to "string", "sourceRevision" to "integer", "sampleRevision" to "integer"), listOf("pluginId", "sourceRevision"), true) { args ->
             graph.nativeBuilds.build(plugin(args), args.getLong("sourceRevision"), args.optLong("sampleRevision", binding.sampleRevision))
         }
@@ -210,6 +216,7 @@ class ToolCatalog(private val graph: EasylspApp) {
         add("run_skill", "Start an enabled executable Skill with JSON arguments", mapOf("skillId" to "string", "arguments" to "object"), listOf("skillId", "arguments"), true,
             preview = { args -> val skill = graph.store.workflows.skill(args.getString("skillId")) ?: error("Skill 不存在"); "${skill.name} · ${skill.runtime}\n${skill.source}\n参数：${args.getJSONObject("arguments")}" }) { args -> graph.skillPackages.requireSkill(args.getString("skillId"), binding.projectBinding?.id, true); JSONObject().put("executionId", graph.skills.start(binding.workspace.id, args.getString("skillId"), args.getJSONObject("arguments"))) }
         add("frida_attach", "Attach user-installed frida-inject to an explicit PID with JavaScript. Requires actual device injector/permissions; no BeanShell conversion. Stop with stop_execution.", mapOf("pid" to "integer", "source" to "string", "binary" to "string", "root" to "boolean", "timeoutSeconds" to "integer"), listOf("pid", "source", "binary", "root"), true) { args -> JSONObject().put("executionId", graph.frida.start(project.id, args.getInt("pid"), args.getString("source"), args.getString("binary"), args.getBoolean("root"), args.optInt("timeoutSeconds", 3600))) }
+        definitions += ReleaseTools(graph).definitions(binding)
         definitions += WorkflowTools(graph).definitions(binding)
         if (binding.projectBinding != null) definitions += NativeTools(graph).definitions(binding)
         definitions += WorkspaceTools(graph, binding).definitions()
@@ -217,7 +224,8 @@ class ToolCatalog(private val graph: EasylspApp) {
         definitions += graph.mcp.restoredTools(binding)
         return definitions.map { tool ->
             val group = groups[tool.name] ?: tool.groupId
-            tool.copy(groupId = group, defaultAvailable = tool.name in defaultTools || group in setOf("workspace.files", "workspace.execution"))
-        }.filter { binding.projectBinding != null || !it.groupId.startsWith("project.") }.sortedBy { it.name }
+            tool.copy(groupId = group, defaultAvailable = tool.name in defaultTools || group in setOf("workspace.files", "workspace.execution"),
+                invoke = { args -> withContext(io.github.easylsp.app.platform.terminal.ExecutionOwner.conversation.asContextElement(binding.conversationId)) { tool.invoke(args) } })
+        }.sortedBy { it.name }
     }
 }

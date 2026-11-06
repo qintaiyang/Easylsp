@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import WebSocket from 'ws';
@@ -82,7 +82,12 @@ try {
   await client.rpc('child/prompt', { sessionId: child, requestId: 'child-input', contentBlocks: [{ type: 'text', text: 'Independent read-only task' }] });
   await client.rpc('child/wait', { sessionId: child });
   assert.ok((await client.rpc('child/history', { sessionId: child, after: -1, limit: 200 })).events.some(event => event.type === 'turn/end'));
+  await assert.rejects(client.rpc('session/remove-history', { sessionId: child }), /Close the session/);
   await client.rpc('child/close', { sessionId: child });
+  await client.rpc('session/remove-history', { sessionId: child });
+  await assert.rejects(access(join(directory, child)), { code: 'ENOENT' });
+  await assert.rejects(client.rpc('session/remove-history', { sessionId: '../escape' }), /Invalid session/);
+  await client.rpc('session/remove-history', { sessionId: child });
   assert.equal(requests, 4); assert.equal(calls, 1);
   client.socket.terminate(); await host.close(); host = undefined;
   // The daemon owns SDK stdin even after the launcher has exited.

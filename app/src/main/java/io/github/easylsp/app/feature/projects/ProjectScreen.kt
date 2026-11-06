@@ -25,9 +25,9 @@ import io.github.easylsp.app.ui.components.*
     val busy by vm.busy.collectAsStateWithLifecycle()
     val hosts = sessions.values.filter { it.packageName == project.packageName }
     var sessionId by rememberSaveable(project.id) { mutableStateOf<String?>(null) }
-    var tab by rememberSaveable(project.id) { mutableStateOf("chat") }
+    var tab by rememberSaveable(project.id, project.sampleRevision) { mutableStateOf(if (project.kind == "IMPORTED") "analysis" else "chat") }
     var menu by remember { mutableStateOf(false) }
-    var advanced by rememberSaveable(project.id) { mutableStateOf(false) }
+    var advanced by rememberSaveable(project.id, project.sampleRevision) { mutableStateOf(project.kind == "IMPORTED") }
     val host = hosts.firstOrNull { it.id == sessionId }
     LaunchedEffect(hosts.map { it.id }) { if (host == null) sessionId = hosts.firstOrNull { it.processName == project.packageName }?.id ?: hosts.firstOrNull()?.id }
     Column(Modifier.fillMaxSize()) {

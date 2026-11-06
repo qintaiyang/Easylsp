@@ -16,7 +16,7 @@ import java.util.UUID
 class NativePluginWorkflowDeviceTest {
     @get:org.junit.Rule val visible = VisibleActivityRule()
     private lateinit var activity: androidx.test.core.app.ActivityScenario<MainActivity>
-    @org.junit.Before fun show() { activity = androidx.test.core.app.ActivityScenario.launch(MainActivity::class.java) }
+    @org.junit.Before fun show() { activity = androidx.test.core.app.ActivityScenario.launch(android.content.Intent(graph, MainActivity::class.java)) }
     @org.junit.After fun close() { activity.close() }
     private val graph get() = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as EasylspApp
     private suspend fun root(command: String): String {
@@ -118,7 +118,7 @@ class NativePluginWorkflowDeviceTest {
                 val build = graph.nativeBuilds.build(plugin, 1, project.sampleRevision)
                 val result = graph.executions.await(project.id, build.getString("executionId")); assertEquals(result.toString(), 0, result.getInt("exitCode"))
                 val artifact = File(requireNotNull(graph.store.nativePlugins.build(build.getString("buildId"))).artifactPath)
-                NativePluginArtifact.validate(artifact.readBytes())
+                NativePluginArtifact.validate(artifact.readBytes(), 31)
                 val publication = graph.nativeDeployments.enable(plugin, build.getString("buildId"), "NATIVE_ONLY")
                 if (name == "address") {
                     helper = graph.store.create(project, "Conflicting symbol", asset("early-symbol"), runtime = "NATIVE")
@@ -207,14 +207,41 @@ class NativePluginWorkflowDeviceTest {
 
     @Test fun configuredModelGeneratesBuildsPublishesAndVerifies() = runBlocking<Unit>(Dispatchers.IO) {
         check(graph.root.useRoot()); withTimeout(10000) { while (!graph.framework.state.value.active) delay(50) }
-        val providerId = requireNotNull(InstrumentationRegistry.getArguments().getString("nativeProviderId"))
-        val provider = requireNotNull(graph.store.workflows.provider(providerId))
-        val project = requireNotNull(graph.store.dao.projectByPackage("io.github.easylsp.demo"))
+        InstrumentationRegistry.getArguments().getString("interruptedProjectId")?.let { interruptedId ->
+            val interrupted = requireNotNull(graph.store.dao.project(interruptedId))
+            assertEquals("io.github.easylsp.demo", interrupted.packageName)
+            assertEquals("Demo AI 验收", interrupted.name)
+            assertTrue(graph.store.dao.plugins(interruptedId).all { it.runtime == "NATIVE" && it.name.contains("AI 验收") })
+            assertTrue(graph.store.workflows.allConversations().filter { it.projectId == interruptedId }
+                .all { it.title == "Native 插件生成与早期执行验收" })
+            graph.localManagement.deleteProject(interruptedId)
+        }
+        val existing = graph.store.dao.projectByPackage("io.github.easylsp.demo")
+        var project = existing ?: graph.store.select("io.github.easylsp.demo", "Demo AI 验收", "1.0")
+        val originalBackend = project.nativeBackend; val originalPolicy = project.nativePolicy
+        if (project.sampleRevision == 0L) project = graph.samples.capture(project)
+        graph.nativeDeployments.switchBackend(project.id, "ZYGISK", "NATIVE_ONLY")
+        val originalPlugins = graph.store.dao.plugins(project.id).map { it.id }.toSet()
+        val modelId = InstrumentationRegistry.getArguments().getString("nativeModelId") ?: requireNotNull(graph.models.defaultModel(project.id))
+        val provider = graph.models.resolve(modelId)
         val id = UUID.randomUUID().toString()
         graph.store.workflows.insertConversation(ConversationEntity(id, project.id, provider.id, provider.model,
-            "Native 插件生成与早期执行验收", project.sampleRevision, System.currentTimeMillis()))
+            "Native 插件生成与早期执行验收", project.sampleRevision, System.currentTimeMillis(), modelConfigId = modelId))
         fixture()
         InstrumentationRegistry.getInstrumentation().sendStatus(0, android.os.Bundle().apply { putString("conversationId", id) })
+        val targetLog = async {
+            val calls = graph.store.workflows.toolRuns(id).first { calls -> calls.any { it.status == "COMPLETE" &&
+                (it.name == "start_target" || it.name == "start_native_diagnostic" && JSONObject(it.arguments).optString("mode", "EXTERNAL_ONLY") in setOf("NORMAL", "EXTERNAL_ONLY")) &&
+                JSONObject(it.arguments).optBoolean("restart") } }
+            calls.firstOrNull { it.name == "start_native_diagnostic" && it.status == "COMPLETE" }?.let {
+                graph.executions.await(project.id, JSONObject(it.result).getString("executionId"))
+            }
+            val log = root("logcat -d -v raw --pid=${root("pidof io.github.easylsp.demo")} -s EasylspNative:I EasylspDemoNative:I '*:S'")
+            // Let the model collect the live target before changing which app the ROM suspends.
+            graph.store.workflows.toolRuns(id).first { calls -> calls.any { it.name == "get_native_plugin_status" && it.status == "COMPLETE" } }
+            root("am start -W -n io.github.easylsp/.app.MainActivity")
+            log
+        }
         try {
             graph.chat.submit(id, "已授权执行当前 Demo 项目的 Native 插件任务。目标已准备一次性 native-plugin 启动夹具，下一次冷启动会在构造函数调用 libdemo_early_hook.so 中已确认声明为 int easylsp_demo_early_value(int value) 的函数，参数为 7，原函数返回 value+1 并设 errno=33。请先读 Native SDK，再生成新的 C 插件：先把参数加 4，调用原函数，再把结果加 2008，保持原函数 errno，使构造结果为 2020。使用生产工具创建、编译并读取真实编译输出，明确发布成功 buildId 和 NATIVE_ONLY 策略，重启并读取实际实例的安装/命中和 EasylspDemoNative 的 constructor/JNI_OnLoad 日志。Ubuntu 编译 SDK 已准备好，无需重复安装。无需 Java session，不要调用 Java load_plugin。插件名加 AI 验收，完成后保留发布供测试检查；测试会负责停用。不要重复启动以免一次性夹具被消费。请报告具体 buildId/generation/PID 与返回值证据，不把发布成功等同于问题已解决。", null, true, JSONArray()).await()
             val turn = withTimeout(900000) { graph.store.workflows.turns(id).first { it.isNotEmpty() && it.last().finishedAt != null } }.last()
@@ -228,13 +255,25 @@ class NativePluginWorkflowDeviceTest {
             assertTrue("AI 未冷启动目标", calls.any { it.status == "COMPLETE" &&
                 (it.name == "start_target" || it.name == "start_native_diagnostic" && JSONObject(it.arguments).optString("mode", "EXTERNAL_ONLY") in setOf("NORMAL", "EXTERNAL_ONLY")) &&
                 JSONObject(it.arguments).optBoolean("restart") })
-            val log = root("logcat -d -v raw --pid=${root("pidof io.github.easylsp.demo")} -s EasylspNative:I EasylspDemoNative:I '*:S'")
+            assertTrue("AI 未取得实际实例命中", calls.filter { it.name == "get_native_plugin_status" && it.status == "COMPLETE" }.any { call ->
+                val instances = JSONObject(call.result).getJSONArray("instances")
+                (0 until instances.length()).any { index ->
+                    val hooks = instances.getJSONObject(index).getJSONArray("hooks")
+                    (0 until hooks.length()).any { hooks.getJSONObject(it).optBoolean("hitObserved") }
+                }
+            })
+            val log = targetLog.await()
             evidence.put("target", log); File(graph.filesDir, "native-ai-evidence.json").writeText(evidence.toString(2))
             assertTrue(log, log.contains("constructor result=2020 errno=33") && log.contains("hook_hit"))
         } finally {
+            targetLog.cancelAndJoin()
             graph.chat.stop()
             graph.store.dao.plugins(project.id).filter { it.runtime == "NATIVE" && it.desiredEnabled }.forEach { graph.nativeDeployments.disable(it) }
             root("am force-stop io.github.easylsp.demo")
+            graph.store.dao.plugins(project.id).filter { it.id !in originalPlugins }.forEach { graph.store.delete(it.id) }
+            graph.localManagement.deleteConversation(id)
+            if (existing == null) graph.localManagement.deleteProject(project.id)
+            else graph.nativeDeployments.switchBackend(project.id, originalBackend, originalPolicy)
         }
     }
 

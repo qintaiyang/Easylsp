@@ -15,6 +15,31 @@ import org.junit.Test
 import org.junit.Assert.*
 
 class HarnessToolBridgeTest {
+    @Test fun closeWaitsForInFlightToolCleanup() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val cancelling = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var cleaned = false
+        val tool = ToolDefinition("wait", "Owned task", JSONObject("""{"type":"object","properties":{}}"""), invoke = {
+            started.complete(Unit)
+            try { awaitCancellation() }
+            finally { withContext(NonCancellable) { cancelling.complete(Unit); release.await(); cleaned = true } }
+        })
+        HarnessToolBridge(listOf(tool)).use { bridge ->
+            McpClient(McpServerEntity("local", "local", bridge.url), bridge.token).use { client ->
+                client.initialize()
+                val call = launch { client.call("wait", JSONObject()) }
+                withTimeout(5000) { started.await() }
+                val closing = async { bridge.closeAndJoin() }
+                withTimeout(5000) { cancelling.await() }
+                try { assertFalse(closing.isCompleted); assertFalse(cleaned) }
+                finally { release.complete(Unit) }
+                withTimeout(5000) { closing.await(); call.join() }
+                assertTrue(cleaned)
+            }
+        }
+    }
+
     @Test fun capabilityAdmissionMatchesTheStepAndDoesNotChangeDuringItsBatch() = runBlocking {
         var effects = 0
         val tool = ToolDefinition("operation", "A specialized operation", JSONObject("""{"type":"object","properties":{}}"""), invoke = { effects++; JSONObject().put("done", true) })

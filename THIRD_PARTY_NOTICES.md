@@ -20,8 +20,8 @@ Easylsp 原创实现与原创文档采用 **GPL-3.0-or-later**。第三方组件
 | BeanShell | io.github.beanshell:bsh:2.1.1 | https://github.com/beanshell/beanshell/tree/2.1.1 | Apache-2.0，未修改上游源码 |
 | Xposed API | 82，仅 compileOnly | https://github.com/rovo89/XposedBridge / https://api.xposed.info/ | Apache-2.0；框架由设备提供，不打包 API stub |
 | libxposed API | 101.0.1，仅 compileOnly | https://github.com/libxposed/api/tree/101.0.1 | Apache-2.0；使用 101/102 共用公开接口，框架提供，不打包 API stub |
-| ShadowHook | com.bytedance.android:shadowhook:2.0.0 | https://github.com/bytedance/android-inline-hook/releases/tag/v2.0.0 | MIT；未修改上游，arm64 早期 native 观测，原文随 APK 发布 |
-| Android NDK target SDK | r28c / 28.2.13676358，API 34 | https://developer.android.com/ndk/downloads/revision_history | P0 包含 Android headers、AArch64 CRT/system stubs、compiler-rt builtins；保留 NDK NOTICE 与 NOTICE.toolchain 于生成的 `assets/native-sdk/android34-r28c.tar` 的 `licenses/`，含 BSD、Apache-2.0 WITH LLVM-exception 等上游条款；不打包主机编译器 |
+| ShadowHook | ShadowHook v2.0.1 (vendored source) | https://github.com/bytedance/android-inline-hook/releases/tag/v2.0.1 | MIT；统一源码构建，helper-FD 与 JNI 适配见下文，原文随 APK 发布 |
+| Android NDK target SDK | r28c / 28.2.13676358，API 31 | https://developer.android.com/ndk/downloads/revision_history | P0 包含 Android headers、AArch64 CRT/system stubs、compiler-rt builtins；保留 NDK NOTICE 与 NOTICE.toolchain 于生成的 `assets/native-sdk/android31-r28c.tar` 的 `licenses/`，含 BSD、Apache-2.0 WITH LLVM-exception 等上游条款；不打包主机编译器 |
 | libxposed Service / Interface | 101.0.0 | https://github.com/libxposed/service/tree/101.0.0 | Apache-2.0；管理端通过官方服务读取激活状态与框架版本 |
 | OkHttp / Okio | 4.12.0 / 3.6.0 | https://github.com/square/okhttp/tree/parent-4.12.0 / https://github.com/square/okio/tree/parent-3.6.0 | Apache-2.0；原文随 APK 发布，未修改 |
 | DexKit | org.luckypray:dexkit:2.0.7 | https://github.com/LuckyPray/DexKit/tree/2.0.7 | 发布 POM 同时声明 LGPL-3.0 和 Apache-2.0；tag 根 LICENSE 为 Apache-2.0，部分源文件仍有 LGPL-3.0-or-later 头。保留两份条款与此说明，不按 main 分支许可证简化版本事实 |
@@ -35,11 +35,18 @@ Easylsp 原创实现与原创文档采用 **GPL-3.0-or-later**。第三方组件
 
 完整条款存于 `app/src/main/assets/third-party/`，随管理端 APK 发布；设置页可打开。JADX 的 NOTICE 含其汇总的第三方声明，实际启用组件为 Gradle 解析的 core 与 dex-input。Sora 仅使用公开 AAR；对应源码由上述 tag 和 Maven Central sources JAR 提供，可用仓库 Gradle 配置替换重建。新增组件的许可原文随 APK 发布。
 
+## 实验 Zygisk 宿主源码
+
+- 官方 `zygisk.hpp` API v4：topjohnwu/zygisk-module-sample，固定提交 `7bb941ac8edfcffd1d23761e401c45ca95409dc1`。ISC 许可，原始版权和条款保留在 `zygisk-host/third_party/zygisk.hpp`，并随宿主包分发。
+- cJSON v1.7.19：DaveGamble/cJSON，MIT 许可。源码及完整原文位于 `zygisk-host/third_party/`，完整许可随宿主 ZIP 分发。
+- ShadowHook v2.0.1：MIT 许可，固定源码位于 `native-runtime/third_party/shadowhook/`。APK 和宿主使用同一构建；`native-runtime/shadowhook-helper-fd.patch` 提供内部 helper-FD 初始化，arm64 去除 ARM32 专用导出；构建时移除无 Java 类对应的上游 JNI 入口。公开插件 v1 前缀保持二进制兼容，新增能力追加到表尾。
+- 宿主包不包含 Magisk、Zygisk Next、ReZygisk 或 NeoZygisk 提供者实现。
+
 ## 构建与测试依赖
 
 Gradle 8.11.1、AGP 8.9.1、Kotlin 插件 2.1.0（Apache-2.0）；JUnit 4.13.2（EPL-1.0）、Hamcrest（BSD）、AndroidX Test Runner 1.6.2 与 AndroidX Test JUnit 1.2.1（Apache-2.0）。MockWebServer 4.12.0（Apache-2.0）和 org.json 20240303（公共领域）用于 JVM 与 Android 本地可控服务协议测试。测试依赖不进入主 APK。Gradle Wrapper 来自官方 Gradle wrapper 任务。
 
-除明确列出的 Termux 上游源码外，其余依赖通过公开 Maven 仓库取得，未使用反编译代码或参考 APK 的原生库。依赖版本、对应源码入口与再构建方法一同保留。
+除明确列出的 Termux 和实验宿主上游源码外，其余应用依赖通过公开 Maven 仓库取得，未使用反编译代码或参考 APK 的原生库。依赖版本、对应源码入口与再构建方法一同保留。
 
 Frida 后端不随包分发 frida-inject 或 Java bridge；使用用户设备上的可执行文件。独立模板附带自身 GPL、BeanShell 与 Apache 许可，模板没有绑定管理端服务。
 
@@ -51,3 +58,7 @@ Harness 在上述环境使用官方 Node.js 24.11.0 Linux arm64 发行包（MIT 
 
 - SnakeYAML 2.3 — Apache License 2.0. Parses standard Skill YAML frontmatter using SafeConstructor. https://bitbucket.org/snakeyaml/snakeyaml
 - MCP TypeScript client 2.2.0 — MIT License, Anthropic. The Harness dependency supplies HTTP/SSE/stdio transports and OAuth/PKCE. https://github.com/modelcontextprotocol/typescript-sdk
+
+Bouncy Castle bcprov-jdk18on 1.79（MIT；https://github.com/bcgit/bc-java/tree/r1rv79）。市场 Ed25519 验签直接使用轻量 API，避免 Android Keystore 提供者不支持导入 SPKI 公钥；许可随 APK 保留在 BouncyCastle-LICENSE.html。
+
+M7 的 Next 独立适配使用独立声明的公开 API3/API4 互操作布局，规格来源为 https://github.com/Dr-TSNG/ZygiskNext/blob/main/zygisk_next_api.h 与 docs/hyos_runtime.md（2026-11-06核对）。未复制 Next 实现，不分发提供者二进制；其发行限制仍适用。PLT 实现属于本项目 Core，没有引入其他 inline Hook 后端。

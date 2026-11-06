@@ -38,7 +38,8 @@ class P3DeviceTest {
             val parsed = graph.packageManager.getPackageArchiveInfo(file.path, 0)
             assertNotNull(parsed)
             assertEquals(io.github.easylsp.app.platform.export.ApkExporter.packageName(plugin.id), parsed!!.packageName)
-            assertTrue(com.android.apksig.ApkVerifier.Builder(file).setMinCheckedPlatformVersion(34).build().verify().isVerified)
+            assertEquals(31, parsed.applicationInfo!!.minSdkVersion)
+            assertTrue(com.android.apksig.ApkVerifier.Builder(file).setMinCheckedPlatformVersion(31).build().verify().isVerified)
         } finally { store.delete(plugin.id) }
     }
     @Test fun enabledSkillExecutesAndDisabledSkillCannotStart() = runBlocking {

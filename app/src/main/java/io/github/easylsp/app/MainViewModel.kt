@@ -46,9 +46,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         "应用列表已刷新"
     }
     fun select(app: InstalledApp, done: (ProjectEntity) -> Unit) = action { done(graph.store.select(app.packageName, app.name, app.version)); "项目已选择；请在 LSPosed 配置作用域" }
+    fun setApplicationScope(app: InstalledApp, enabled: Boolean) = action {
+        withContext(Dispatchers.IO) {
+            if (enabled) graph.framework.requestScope(app.packageName)
+            else graph.framework.removeScope(app.packageName)
+        }
+        if (enabled) "已向框架请求 ${app.name} 的作用域，请在框架提示中确认" else "已从作用域移除 ${app.name}，重启目标应用后生效"
+    }
     fun create(project: ProjectEntity, example: String?, name: String = example ?: "新插件", author: String = "", description: String = "", version: String = "1.0", runtime: String = "BEANSHELL", done: (PluginEntity) -> Unit) = action {
         val source = withContext(Dispatchers.IO) { if (runtime == "NATIVE") graph.assets.open("native-sdk/blank.c").bufferedReader().use { it.readText() } else if (example == null) "void onLoad() {\n    plugin.log(\"插件已加载\");\n}\n\nvoid onUnload() {\n    plugin.log(\"插件已卸载\");\n}\n" else graph.assets.open("$example/main.java").bufferedReader().use { it.readText() } }
         done(graph.store.create(project, name, source, author, description, version, runtime = runtime)); "插件已创建，尚未启用"
+    }
+    fun enableRelease(plugin: PluginEntity) = action {
+        graph.releaseActivation.enable(plugin)
+        "固定发行及依赖已启用，请重启目标生效"
+    }
+    fun disableRelease(plugin: PluginEntity, delete: Boolean = false) = action {
+        graph.releaseActivation.disable(plugin, delete)
+        if (delete) "整组发行已删除，请重启目标" else "整组发行已停用，请重启目标；依赖发行保留"
     }
     fun setEnabled(project: ProjectEntity, plugin: PluginEntity, enabled: Boolean) = action {
         if (plugin.runtime == "NATIVE") {
@@ -56,14 +71,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             withContext(Dispatchers.IO) { graph.nativeDeployments.disable(plugin) }
             return@action "已停用；下次目标新进程生效"
         }
+        if (enabled) withContext(Dispatchers.IO) {
+            val dependencies = ReleaseDependencies.installedOrder(plugin, graph.store.dao.plugins(project.id))
+            require(dependencies.all { it.id == plugin.id || it.desiredEnabled }) { "请先启用联合发行与依赖" }
+        }
         graph.store.enable(plugin.id, enabled)
-        if (graph.bridge.sessions.value.values.none { it.packageName == project.packageName && PluginProcesses.matches(plugin, project.packageName, it.processName) }) "配置已保存；目标连接后按启用状态加载"
+        if (graph.bridge.sessions.value.values.none { it.uid / 100000 == project.userId && it.packageName == project.packageName && PluginProcesses.matches(plugin, project.packageName, it.processName) }) "配置已保存；目标连接后按启用状态加载"
         else graph.bridge.command(project.packageName, if (enabled) "loadPlugin" else "unloadPlugin", plugin.id)
     }
     fun command(project: ProjectEntity, operation: String, plugin: PluginEntity? = null) = action { graph.bridge.command(project.packageName, operation, plugin?.id) }
     fun delete(project: ProjectEntity, plugin: PluginEntity, done: () -> Unit) = action {
-        if (plugin.runtime == "NATIVE") withContext(Dispatchers.IO) { graph.nativeDeployments.disable(plugin) }
-        else if (graph.bridge.sessions.value.values.any { it.packageName == project.packageName && PluginProcesses.matches(plugin, project.packageName, it.processName) }) graph.bridge.command(project.packageName, "unloadPlugin", plugin.id)
+        if (plugin.runtime == "NATIVE" && project.kind == "INSTALLED") withContext(Dispatchers.IO) { graph.nativeDeployments.disable(plugin) }
+        else if (graph.bridge.sessions.value.values.any { it.uid / 100000 == project.userId && it.packageName == project.packageName && PluginProcesses.matches(plugin, project.packageName, it.processName) }) graph.bridge.command(project.packageName, "unloadPlugin", plugin.id)
         graph.store.delete(plugin.id); done(); "插件已删除"
     }
     fun buildNative(project: ProjectEntity, plugin: PluginEntity) = action {
@@ -82,7 +101,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         withContext(Dispatchers.IO) {
             require(graph.root.useRoot()) { "重启目标需要已授予的 root" }
             val output = StringBuilder()
-            val code = graph.executions.runner.execute(java.util.UUID.randomUUID().toString(), listOf(graph.root.su, "-c", "am force-stop ${io.github.easylsp.app.platform.root.RootCommand.quote(project.packageName)} && am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p ${io.github.easylsp.app.platform.root.RootCommand.quote(project.packageName)}"), graph.filesDir, closeInput = true) { output.append(it) }.exitCode
+            val code = graph.executions.runner.execute(java.util.UUID.randomUUID().toString(), listOf(graph.root.su, "-c", "am force-stop --user ${project.userId} ${io.github.easylsp.app.platform.root.RootCommand.quote(project.packageName)} && am start --user ${project.userId} -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p ${io.github.easylsp.app.platform.root.RootCommand.quote(project.packageName)}"), graph.filesDir, closeInput = true) { output.append(it) }.exitCode
             check(code == 0) { output.toString() }
             nativeReports.update { it + (plugin.id to graph.nativeInstances.status(plugin).toString(2)) }
         }

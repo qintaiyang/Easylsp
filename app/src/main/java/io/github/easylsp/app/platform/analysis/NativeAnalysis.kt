@@ -1,5 +1,6 @@
 package io.github.easylsp.app.platform.analysis
 
+import io.github.easylsp.app.util.readUpTo
 import io.github.easylsp.app.EasylspApp
 import io.github.easylsp.app.platform.root.RootCommand
 import kotlinx.coroutines.*
@@ -19,7 +20,7 @@ class NativeAnalysis(private val graph: EasylspApp) {
         zip.getInputStream(entry).use { stream ->
             var remaining = offset
             while (remaining > 0) { val skipped = stream.skip(remaining); require(skipped > 0) { "ELF entry 不完整" }; remaining -= skipped }
-            stream.readNBytes(count).also { require(it.size == count) { "ELF entry 不完整" } }
+            stream.readUpTo(count).also { require(it.size == count) { "ELF entry 不完整" } }
         }
     }
     private fun elf(file: File) = RandomAccessFile(file, "r").use { input -> NativeElf.read(input.length()) { offset, count -> input.seek(offset); ByteArray(count).also(input::readFully) } }

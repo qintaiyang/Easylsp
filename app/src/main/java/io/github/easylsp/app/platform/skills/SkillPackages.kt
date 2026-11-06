@@ -1,5 +1,6 @@
 package io.github.easylsp.app.platform.skills
 
+import io.github.easylsp.app.util.readUpTo
 import io.github.easylsp.app.EasylspApp
 import io.github.easylsp.app.data.SkillEntity
 import io.github.easylsp.app.platform.network.HttpCalls
@@ -21,7 +22,7 @@ object PackagePaths {
             check(entry.name)
             if (entry.isDirectory) continue
             require(files.size < 500 && !files.containsKey(entry.name)) { "包条目过多或路径重复" }
-            val bytes = zip.readNBytes(2 * 1024 * 1024 + 1); total += bytes.size
+            val bytes = zip.readUpTo(2 * 1024 * 1024 + 1); total += bytes.size
             require(bytes.size <= 2 * 1024 * 1024 && total <= 16 * 1024 * 1024) { "包大小超过限制：单文件 2 MiB、合计 16 MiB" }
             files[entry.name] = bytes
         } }
@@ -133,7 +134,7 @@ class SkillPackages(private val graph: EasylspApp) {
         val subdir = if (path.size > 4 && path[2] == "tree") path.drop(4).joinToString("/") + "/" else ""
         val client = OkHttpClient.Builder().retryOnConnectionFailure(false).callTimeout(90, TimeUnit.SECONDS).build()
         return HttpCalls.execute(client, Request.Builder().url("https://api.github.com/repos/$owner/$repo/zipball/$ref").build()) { response ->
-            val bytes = requireNotNull(response.body).byteStream().use { it.readNBytes(16 * 1024 * 1024 + 1) }
+            val bytes = requireNotNull(response.body).byteStream().use { it.readUpTo(16 * 1024 * 1024 + 1) }
             require(bytes.size <= 16 * 1024 * 1024) { "仓库 ZIP 超过 16 MiB，请导入单个 Skill 的 ZIP" }
             if (subdir.isEmpty()) import(bytes.inputStream(), url) else {
                 val selected = ByteArrayOutputStream()
@@ -142,7 +143,7 @@ class SkillPackages(private val graph: EasylspApp) {
                     val entry = zip.nextEntry ?: break
                     val relative = entry.name.substringAfter('/', "")
                     if (!entry.isDirectory && relative.startsWith(subdir)) {
-                        val data = zip.readNBytes(2 * 1024 * 1024 + 1); selectedBytes += data.size; selectedCount++
+                        val data = zip.readUpTo(2 * 1024 * 1024 + 1); selectedBytes += data.size; selectedCount++
                         require(data.size <= 2 * 1024 * 1024 && selectedBytes <= 16 * 1024 * 1024 && selectedCount <= 500) { "Skill 包超过大小或条目限制" }
                         output.putNextEntry(java.util.zip.ZipEntry(relative.removePrefix(subdir))); output.write(data); output.closeEntry()
                     }

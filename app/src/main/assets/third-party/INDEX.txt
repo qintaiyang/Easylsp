@@ -20,8 +20,8 @@ Easylsp 原创实现与原创文档采用 **GPL-3.0-or-later**。第三方组件
 | BeanShell | io.github.beanshell:bsh:2.1.1 | https://github.com/beanshell/beanshell/tree/2.1.1 | Apache-2.0，未修改上游源码 |
 | Xposed API | 82，仅 compileOnly | https://github.com/rovo89/XposedBridge / https://api.xposed.info/ | Apache-2.0；框架由设备提供，不打包 API stub |
 | libxposed API | 101.0.1，仅 compileOnly | https://github.com/libxposed/api/tree/101.0.1 | Apache-2.0；使用 101/102 共用公开接口，框架提供，不打包 API stub |
-| ShadowHook | com.bytedance.android:shadowhook:2.0.0 | https://github.com/bytedance/android-inline-hook/releases/tag/v2.0.0 | MIT；未修改上游，arm64 早期 native 观测，原文随 APK 发布 |
-| Android NDK target SDK | r28c / 28.2.13676358，API 34 | https://developer.android.com/ndk/downloads/revision_history | P0 包含 Android headers、AArch64 CRT/system stubs、compiler-rt builtins；保留 NDK NOTICE 与 NOTICE.toolchain 于生成的 `assets/native-sdk/android34-r28c.tar` 的 `licenses/`，含 BSD、Apache-2.0 WITH LLVM-exception 等上游条款；不打包主机编译器 |
+| ShadowHook | ShadowHook v2.0.1 (vendored source) | https://github.com/bytedance/android-inline-hook/releases/tag/v2.0.1 | MIT；统一源码构建，helper-FD 与 JNI 适配，原文随 APK 发布 |
+| Android NDK target SDK | r28c / 28.2.13676358，API 31 | https://developer.android.com/ndk/downloads/revision_history | P0 包含 Android headers、AArch64 CRT/system stubs、compiler-rt builtins；保留 NDK NOTICE 与 NOTICE.toolchain 于生成的 `assets/native-sdk/android31-r28c.tar` 的 `licenses/`，含 BSD、Apache-2.0 WITH LLVM-exception 等上游条款；不打包主机编译器 |
 | libxposed Service / Interface | 101.0.0 | https://github.com/libxposed/service/tree/101.0.0 | Apache-2.0；管理端通过官方服务读取激活状态与框架版本 |
 | OkHttp / Okio | 4.12.0 / 3.6.0 | https://github.com/square/okhttp/tree/parent-4.12.0 / https://github.com/square/okio/tree/parent-3.6.0 | Apache-2.0；原文随 APK 发布，未修改 |
 | DexKit | org.luckypray:dexkit:2.0.7 | https://github.com/LuckyPray/DexKit/tree/2.0.7 | 发布 POM 同时声明 LGPL-3.0 和 Apache-2.0；tag 根 LICENSE 为 Apache-2.0，部分源文件仍有 LGPL-3.0-or-later 头。保留两份条款与此说明，不按 main 分支许可证简化版本事实 |
@@ -51,3 +51,7 @@ Harness 在上述环境使用官方 Node.js 24.11.0 Linux arm64 发行包（MIT 
 
 - SnakeYAML 2.3 — Apache License 2.0. Parses standard Skill YAML frontmatter using SafeConstructor. https://bitbucket.org/snakeyaml/snakeyaml
 - MCP TypeScript client 2.2.0 — MIT License, Anthropic. The Harness dependency supplies HTTP/SSE/stdio transports and OAuth/PKCE. https://github.com/modelcontextprotocol/typescript-sdk
+
+实验宿主 Zygisk API v4（ISC）与 cJSON v1.7.19（MIT）只进入单独宿主 ZIP，其许可见随 ZIP 分发的 licenses/；提供者实现不随包分发。
+
+Bouncy Castle bcprov-jdk18on 1.79（MIT；https://github.com/bcgit/bc-java/tree/r1rv79）。市场 Ed25519 验签直接使用轻量 API，避免 Android Keystore 提供者不支持导入 SPKI 公钥；许可随 APK 保留在 BouncyCastle-LICENSE.html。

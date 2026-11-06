@@ -10,18 +10,18 @@ import java.util.UUID
 
 /** Immutable source/build snapshots; compilation never needs a running target session. */
 class NativeBuildService(private val graph: EasylspApp) {
-    private val sdk = "/opt/easylsp-native-sdk-r28c-api34-p0-v1"
+    private val sdk = "/opt/easylsp-native-sdk-r28c-api31-p0-v4"
     suspend fun prepare(projectId: String): JSONObject {
-        val archive = File(graph.executions.directory(projectId), "native-sdk-android34-r28c.tar")
-        graph.assets.open("native-sdk/android34-r28c.tar").use { input -> archive.outputStream().use { input.copyTo(it) } }
+        val archive = File(graph.executions.directory(projectId), "native-sdk-android31-r28c.tar")
+        graph.assets.open("native-sdk/android31-r28c.tar").use { input -> archive.outputStream().use { input.copyTo(it) } }
         val script = "set -e; test \"\$(uname -m)\" = aarch64; apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y clang-18 lld-18 python3; " +
             "mkdir -p $sdk; tar -xf ${RootCommand.quote("/workspace/$projectId/${archive.name}")} -C $sdk; clang-18 --version; ld.lld-18 --version; cat $sdk/sdk.json"
         val command = graph.linux.command(projectId, script)
-        val execution = graph.executions.start(projectId, "native-build-tools", "准备 Android C17 编译工具") { id, output ->
+        val execution = graph.executions.start(projectId, "native-build-tools", "准备 Android C/C++ 编译工具") { id, output ->
             graph.executions.runner.execute(id, command, graph.executions.directory(projectId), closeInput = true, timeoutSeconds = 600, output = output).exitCode
         }
-        return JSONObject().put("executionId", execution).put("sdkVersion", "1").put("ndkVersion", "28.2.13676358")
-            .put("compiler", "Ubuntu clang-18/lld-18").put("abi", "arm64-v8a").put("minApi", 34)
+        return JSONObject().put("executionId", execution).put("sdkVersion", "p0-v4-api31-m7").put("ndkVersion", "28.2.13676358")
+            .put("compiler", "Ubuntu clang-18/lld-18").put("abi", "arm64-v8a").put("minApi", 31)
     }
     fun directory(projectId: String, buildId: String): File {
         UUID.fromString(buildId)
@@ -53,12 +53,12 @@ class NativeBuildService(private val graph: EasylspApp) {
             RootCommand.quote("/workspace/$projectId/native-builds/$buildId") + " " + RootCommand.quote(buildId)
         val command = graph.linux.command(projectId, script)
         val execution = graph.executions.start(projectId, "native-build", "Android native 构建 $buildId") { id, output ->
-            val row = NativeBuildEntity(buildId, pluginId, projectId, sourceRevision, sampleRevision, "1", "Ubuntu Clang/LLD 18 + NDK r28c", executionId = id)
+            val row = NativeBuildEntity(buildId, pluginId, projectId, sourceRevision, sampleRevision, "p0-v4-api31-m7", "Ubuntu Clang/LLD 18 + NDK r28c", executionId = id)
             graph.store.nativePlugins.saveBuild(row)
             val record = JSONObject().put("buildId", buildId).put("pluginId", pluginId).put("projectId", projectId)
-                .put("sourceRevision", sourceRevision).put("sampleRevision", sampleRevision).put("sdkVersion", "1")
+                .put("sourceRevision", sourceRevision).put("sampleRevision", sampleRevision).put("sdkVersion", "p0-v4-api31-m7")
                 .put("toolchainVersion", "Ubuntu clang-18/lld-18 + NDK 28.2.13676358").put("abi", "arm64-v8a")
-                .put("minApi", 34).put("executionId", id).put("state", "BUILDING")
+                .put("minApi", 31).put("executionId", id).put("state", "BUILDING")
             val file = File(directory, "build.json")
             file.writeText(record.toString(2))
             try {

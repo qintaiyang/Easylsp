@@ -24,6 +24,9 @@ final class NativeStartupConfig {
         String policy = snapshot.getString("policy");
         require(policy.equals("JAVA_ONLY") || policy.equals("NATIVE_ONLY") || policy.equals("NATIVE_AND_JAVA"), "Unknown native policy");
         JSONArray items = snapshot.getJSONArray("plugins");
+        String backend = snapshot.optString("backend", "LIBXPOSED");
+        require(backend.equals("LIBXPOSED") || backend.equals("ZYGISK"), "Unknown native backend");
+        if (backend.equals("ZYGISK")) return new NativeStartupConfig(generation, policy, List.of());
         require(items.length() <= 16 && (!policy.equals("JAVA_ONLY") || items.length() == 0), "Invalid native plugin count/policy");
         List<JSONObject> plugins = new ArrayList<>();
         HashSet<String> ids = new HashSet<>();

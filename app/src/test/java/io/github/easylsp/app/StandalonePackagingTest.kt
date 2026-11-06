@@ -42,8 +42,8 @@ class StandalonePackagingTest {
             // AGP creates this same debug key while assembling the test's template dependency.
             val keys = KeyStore.getInstance(File(System.getProperty("easylsp.debugKeystore")!!), "android".toCharArray())
             val signer = ApkSigner.SignerConfig.Builder("fixture", keys.getKey("androiddebugkey", "android".toCharArray()) as PrivateKey, listOf(keys.getCertificate("androiddebugkey") as X509Certificate)).build()
-            ApkSigner.Builder(listOf(signer)).setInputApk(unsigned).setOutputApk(signed).setMinSdkVersion(34).setV1SigningEnabled(false).setV2SigningEnabled(true).setV3SigningEnabled(false).setV4SigningEnabled(false).build().sign()
-            val result = ApkVerifier.Builder(signed).setMinCheckedPlatformVersion(34).build().verify()
+            ApkSigner.Builder(listOf(signer)).setInputApk(unsigned).setOutputApk(signed).setMinSdkVersion(31).setV1SigningEnabled(false).setV2SigningEnabled(true).setV3SigningEnabled(false).setV4SigningEnabled(false).build().sign()
+            val result = ApkVerifier.Builder(signed).setMinCheckedPlatformVersion(31).build().verify()
             assertTrue(result.errors.toString(), result.isVerified); assertTrue(result.isVerifiedUsingV2Scheme)
             val exportDir = File(System.getProperty("easylsp.packagingResult")!!).apply { mkdirs() }
             signed.copyTo(File(exportDir, "standalone-fixture.apk"), overwrite = true)

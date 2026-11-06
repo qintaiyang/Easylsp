@@ -4,7 +4,7 @@ android {
     compileSdk = 36
     ndkVersion = "28.2.13676358"
     defaultConfig {
-        minSdk = 34
+        minSdk = 31
         ndk { abiFilters += "arm64-v8a" }
         externalNativeBuild { ndkBuild { cFlags += listOf("-std=c11", "-Wall", "-Os", "-fno-stack-protector", "-Wl,--gc-sections") } }
     }

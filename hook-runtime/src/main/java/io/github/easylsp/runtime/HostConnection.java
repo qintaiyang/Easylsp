@@ -32,9 +32,14 @@ public final class HostConnection implements ServiceConnection, PluginEngine.Eve
         engine = new PluginEngine(driver, app.getClassLoader(), app, this);
     }
     public void start() {
-        app.registerReceiver(new BroadcastReceiver() {
+        BroadcastReceiver reconnect = new BroadcastReceiver() {
             @Override public void onReceive(Context context, Intent intent) { worker.post(() -> { disconnect(); bind(); }); }
-        }, new IntentFilter(Protocol.RECONNECT_ACTION), Protocol.RECONNECT_PERMISSION, worker, Context.RECEIVER_EXPORTED);
+        };
+        if (Build.VERSION.SDK_INT >= 33) {
+            app.registerReceiver(reconnect, new IntentFilter(Protocol.RECONNECT_ACTION), Protocol.RECONNECT_PERMISSION, worker, Context.RECEIVER_EXPORTED);
+        } else {
+            app.registerReceiver(reconnect, new IntentFilter(Protocol.RECONNECT_ACTION), Protocol.RECONNECT_PERMISSION, worker);
+        }
         worker.post(this::bind);
     }
     private void bind() {
@@ -119,10 +124,10 @@ public final class HostConnection implements ServiceConnection, PluginEngine.Eve
         java.util.ArrayList<java.nio.ByteBuffer> buffers = new java.util.ArrayList<>();
         for (String name : bridge.listPluginLibraries(session, id, revision)) {
             try (ParcelFileDescriptor fd = bridge.openPluginLibrary(session, id, revision, name); InputStream input = new ParcelFileDescriptor.AutoCloseInputStream(fd)) {
-                if (name.endsWith(".dex")) buffers.add(java.nio.ByteBuffer.wrap(input.readAllBytes()));
+                if (name.endsWith(".dex")) buffers.add(java.nio.ByteBuffer.wrap(io.github.easylsp.runtime.StreamIO.readAll(input)));
                 else try (java.util.zip.ZipInputStream zip = new java.util.zip.ZipInputStream(input)) {
                     java.util.zip.ZipEntry entry;
-                    while ((entry = zip.getNextEntry()) != null) if (entry.getName().matches("classes(?:[0-9]+)?\\.dex")) buffers.add(java.nio.ByteBuffer.wrap(zip.readAllBytes()));
+                    while ((entry = zip.getNextEntry()) != null) if (entry.getName().matches("classes(?:[0-9]+)?\\.dex")) buffers.add(java.nio.ByteBuffer.wrap(io.github.easylsp.runtime.StreamIO.readAll(zip)));
                 }
             }
         }
@@ -133,7 +138,7 @@ public final class HostConnection implements ServiceConnection, PluginEngine.Eve
         java.util.UUID.fromString(id);
         File dir = new File(app.getCacheDir(), "easylsp"); dir.mkdirs();
         File file = new File(dir, id + "-" + revision + ".java");
-        try (InputStream input = new ParcelFileDescriptor.AutoCloseInputStream(fd); OutputStream output = new FileOutputStream(file)) { input.transferTo(output); }
+        try (InputStream input = new ParcelFileDescriptor.AutoCloseInputStream(fd); OutputStream output = new FileOutputStream(file)) { StreamIO.copy(input, output); }
         return file;
     }
     private void complete(String id, boolean success, String message) {

@@ -52,7 +52,7 @@ class LinuxEnvironment(private val graph: EasylspApp) {
         require(graph.root.useRoot()) { "Linux 环境需要设备 su 授权" }
         val mounts = listOf("/dev", "/proc").joinToString("; ") { path -> "mount --rbind ${q(path)} ${q(root.path + path)}" }
         val files = if (appFiles) "mkdir -p ${q(root.path + graph.filesDir.path)}; mount --bind ${q(graph.filesDir.path)} ${q(root.path + graph.filesDir.path)}; " else ""
-        val inner = "set -e; export PATH=/opt/easylsp-node-v24.11.0/bin:/usr/local/bin:/usr/bin:/bin; $script"
+        val inner = "set -e; export HOME=/root TMPDIR=/tmp PATH=/opt/easylsp-node-v24.11.0/bin:/usr/local/bin:/usr/bin:/bin; $script"
         return listOf(graph.root.su, "-c", namespace.shell("$mounts; $files exec chroot ${q(root.path)} /bin/bash -c ${q(inner)}"))
     }
     private suspend fun runRoot(script: String): String {
@@ -68,7 +68,7 @@ class LinuxEnvironment(private val graph: EasylspApp) {
         val projectDirectory = root.path + "/workspace/$projectId"
         val fileMount = if (appFiles) "mkdir -p ${q(root.path + graph.filesDir.path)}; mount --bind ${q(graph.filesDir.path)} ${q(root.path + graph.filesDir.path)}; " else ""
         val setup = "$mount; $fileMount mkdir -p ${q(projectDirectory)}; mount --bind ${q(workspace.path)} ${q(projectDirectory)}"
-        val inner = "umask 0007; cd ${q("/workspace/$projectId")}; export TERM=xterm-256color PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; $script"
+        val inner = "umask 0007; cd ${q("/workspace/$projectId")}; export HOME=/root TMPDIR=/tmp TERM=xterm-256color PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; $script"
         if (backend == "proot") {
             // Existing Termux proot is usable through su without granting access to Termux sessions.
             val proot = "/data/data/com.termux/files/usr/bin/proot"
