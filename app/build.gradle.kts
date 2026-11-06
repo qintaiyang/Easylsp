@@ -168,8 +168,11 @@ val prepareNativeAcceptance = tasks.register<Exec>("prepareNativeAcceptance") {
     inputs.files(rootProject.fileTree("examples/native-plugins"), rootProject.file("scripts/prepare-native-candidates.py"), rootProject.file("native-runtime/src/main/cpp/include/easylsp_native_plugin.h"))
     val demoLibrary = project(":demo-target").layout.buildDirectory.file("intermediates/merged_native_libs/debug/mergeDebugNativeLibs/out/lib/arm64-v8a/libdemo_early_hook.so")
     inputs.file(demoLibrary)
+    inputs.file(androidComponents.sdkComponents.ndkDirectory.get().file("source.properties"))
     outputs.dir(nativeAcceptanceAssets)
-    commandLine("python3", rootProject.file("scripts/prepare-native-candidates.py"), "--demo-lib", demoLibrary.get().asFile, "--output", nativeAcceptanceAssets.get().dir("fixed-native").asFile)
+    commandLine("python3", rootProject.file("scripts/prepare-native-candidates.py"),
+        "--ndk", androidComponents.sdkComponents.ndkDirectory.get().asFile,
+        "--demo-lib", demoLibrary.get().asFile, "--output", nativeAcceptanceAssets.get().dir("fixed-native").asFile)
 }
 android.sourceSets["androidTest"].assets.srcDir(files(nativeAcceptanceAssets).builtBy(prepareNativeAcceptance))
 tasks.matching { it.name == "mergeDebugAndroidTestAssets" }.configureEach { dependsOn(prepareNativeAcceptance) }

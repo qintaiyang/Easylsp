@@ -12,7 +12,7 @@ Easylsp 是面向 Android 的开源模块开发与调试工具。用自然语言
 - **AI 助手**：支持 OpenAI 兼容、Anthropic 和 Gemini 协议，提供项目会话、附件、历史分支、任务用量和工具授权。
 - **Java 插件**：BeanShell Hook，支持 before／after／replace、版本保存、加载、重载、卸载及日志。
 - **Native 插件**：支持 C17／C++17、静态 STL、符号与地址 Hook、CHAIN、JNI 注册、ARM64 指令拦截、调用方 PLT 和运行中注册／解除，可选择 Zygisk 或 libxposed 后端并与 Java 插件联合使用。
-- **插件市场**：签名目录、固定预编译发行、配置、更新、回退、联合发行与固定依赖；支持作者上传 Release 和提交市场收录申请。
+- **插件市场**：签名目录、固定预编译发行、配置、更新、回退、联合发行与固定依赖；AI 可使用作者账号创建 GitHub 仓库、提交指定源码、上传 Release 和提交市场收录申请。
 - **应用分析**：查询类、方法、字段、字符串及引用，查看 Java、Smali、Manifest 和资源，检视目标进程与 View 树。
 - **工作台与扩展**：PTY 终端、Ubuntu chroot、MCP、Skill、工具插件、记忆与手机操作。
 - **后台运行**：root 授权后自动配置 UID0 保活服务，可在执行环境中关闭或修复；提供小米、一加、真我的系统后台设置入口。管理器应用保留 Android 分配的 UID。

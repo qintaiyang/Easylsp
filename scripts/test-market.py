@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -40,8 +41,9 @@ class MarketTest(unittest.TestCase):
             root=Path(directory)
             source=root/'plugin.c';source.write_text('int easylsp_plugin_init_v1(const void *h,const void *c) { (void)h;(void)c;return 0; }')
             library=root/'plugin.so'
-            compiler='/opt/android-sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang'
-            subprocess.run([compiler,'-shared','-fPIC','-Wl,-z,max-page-size=16384','-Wl,--hash-style=both',str(source),'-o',str(library)],check=True)
+            sdk=Path(os.environ.get('ANDROID_HOME') or os.environ.get('ANDROID_SDK_ROOT') or '/opt/android-sdk')
+            compiler=sdk/'ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang'
+            subprocess.run([str(compiler),'-shared','-fPIC','-Wl,-z,max-page-size=16384','-Wl,--hash-style=both',str(source),'-o',str(library)],check=True)
             manifest=dict(formatVersion=3,catalogPluginId='joint',publisherId='author',releaseId='one',versionCode=1,versionName='1',name='Joint',description='',license='MIT',sourceUrl='https://example.com/source',channel='test',changelog='',publishedAt='2026-11-06',runtime='JAVA_NATIVE',pluginAbi=1,sdkVersion='m7',minHostVersion=9,requiredCapabilities=['release.joint','release.dependencies'],artifacts=[dict(abi='arm64-v8a',minApi=31,artifactPath='native/arm64-v8a/plugin.so'),dict(abi='any',minApi=31,artifactPath='java/main.java')],target=dict(packageName='fixture.demo',processScope='main'),dependencies=[dict(sourceId='third',publisherId='author',catalogPluginId='dependency',releaseId='fixed')])
             archive=root/'joint.zip'
             def write():

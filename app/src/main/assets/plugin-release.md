@@ -4,8 +4,8 @@ Official repository: https://github.com/qintaiyang/Easylsp-Market
 Catalog: https://qintaiyang.github.io/Easylsp-Market/catalog.json
 Anonymous readers verify the bundled official Ed25519 key before parsing downloads.
 Local ZIP imports remain unverified IMPORTED_RELEASE identities. Only verified official
-downloads are marked MARKET. Author credentials stay in Android SecretStore, never
-in prompts, tool arguments, tool results or release packages.
+downloads are marked MARKET. Stored author credentials stay in Android SecretStore;
+tools never add their values to prompts, arguments, results or release packages.
 
 A ZIP contains `manifest.json`, `README.md`, `LICENSE`, one native
 `native/arm64-v8a/plugin.so` or `java/main.java`, optional native `src/`/`include/`,
@@ -64,11 +64,27 @@ keys have been configured and the two-account flow has been accepted on devices.
 
 ## Author/AI publication flow
 
-Configure the author account in the market UI (Device Flow with an enabled OAuth Client ID, or an explicit author token). In a project conversation
+Use `get_github_account` to check the existing author account. Configure it in the
+market UI (Device Flow or author token), or use `configure_github_account` with an
+existing `credentialRef` or the `sourceMessageId` of a user message containing an
+explicitly authorized GitHub token. With no arguments it uses the latest user-provided
+GitHub token in the current conversation, including answers to `ask_user`.
+The tool reads and saves the token internally;
+do not repeat its value in arguments, results or files. A token supplied by the user
+in chat can be used for their authorized task; its presence in chat is not a refusal rule.
+In a project conversation
 use its real plugin ID; in a global conversation supply a real existing plugin UUID
 explicitly. `read_development_reference(document="plugin-release")` exposes this text.
 
 1. Save the plugin source and attachments, including full license text in `LICENSE`.
+   If the user requests a new repository, call `create_github_repository`, then
+   `commit_github_source` with an explicit list of source/dependency/license files.
+   These tools share the saved author credentials; no manual GitHub steps, browser,
+   accessibility service or local Git installation are required. Keep the returned
+   real `sourceCommit` and `sourceUrl` for the manifest and upload. Existing repos
+   can use `commit_github_source` directly. Do not upload internal development notes,
+   conversations or credentials. Preserve existing license terms; do not invent
+   permission to relicense third-party files.
 2. For Native select an already accepted successful fixed `buildId`; source files
    from that build's `sourceRevision` are used. Precompiled imports can be re-exported
    without fabricated source. Java uses its saved revision.

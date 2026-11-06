@@ -2,13 +2,15 @@
 """Compile fixed desktop-NDK plugin candidates and an offline v3 example; no adb/su."""
 import argparse
 import json
+import os
 import re
 from pathlib import Path
 import subprocess
 import zipfile
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--ndk', type=Path, default=Path('/opt/android-sdk/ndk/28.2.13676358'))
+sdk = Path(os.environ.get('ANDROID_HOME') or os.environ.get('ANDROID_SDK_ROOT') or '/opt/android-sdk')
+parser.add_argument('--ndk', type=Path, default=sdk / 'ndk/28.2.13676358')
 parser.add_argument('--demo-lib', required=True, type=Path, help='The exact unstripped libdemo_early_hook.so shipped in the Demo APK')
 parser.add_argument('--output', type=Path, default=Path('build/native-candidates'))
 args = parser.parse_args()

@@ -372,13 +372,17 @@
     },
     {
       "id": "release.github",
-      "description": "GitHub 固定发行上传、市场投稿与真实审核收录状态；凭据仅在作者界面配置",
+      "description": "GitHub 作者账号、创建仓库、提交源码、固定发行上传、市场投稿与真实审核收录状态",
       "scopes": [
         "GLOBAL",
         "PROJECT"
       ],
       "tools": [
         "read_development_reference",
+        "get_github_account",
+        "configure_github_account",
+        "create_github_repository",
+        "commit_github_source",
         "publish_plugin_release",
         "submit_market_release",
         "get_market_submission_status"

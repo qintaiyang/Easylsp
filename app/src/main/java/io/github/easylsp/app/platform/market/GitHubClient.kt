@@ -33,6 +33,17 @@ class GitHubClient(private val token: () -> String, private val api: String = "h
         when { text.isBlank() -> JSONObject(); text.startsWith('[') -> JSONArray(text); else -> JSONObject(text) }
     }
     companion object {
+        private val tokenPattern = Regex("(?:github_pat_|gh[pousr]_)[A-Za-z0-9_]{20,}")
+        fun tokenFromMessage(text: String): String {
+            val tokens = tokenPattern.findAll(text).map { it.value }.distinct().toList()
+            require(tokens.size == 1) { "指定消息必须包含一个明确的 GitHub 令牌" }
+            return tokens.single()
+        }
+        fun tokenFromUserHistory(entries: List<Pair<Long, String>>): String {
+            val latest = entries.filter { tokenPattern.containsMatchIn(it.second) }.maxByOrNull { it.first }
+            requireNotNull(latest) { "当前会话没有用户提供的 GitHub 令牌，请配置作者账号" }
+            return tokenFromMessage(latest.second)
+        }
         fun repository(value: String): String { require(value.matches(Regex("[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"))) { "仓库格式应为 owner/repo" }; return value }
     }
 }

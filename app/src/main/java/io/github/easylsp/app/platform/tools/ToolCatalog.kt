@@ -217,6 +217,7 @@ class ToolCatalog(private val graph: EasylspApp) {
             preview = { args -> val skill = graph.store.workflows.skill(args.getString("skillId")) ?: error("Skill 不存在"); "${skill.name} · ${skill.runtime}\n${skill.source}\n参数：${args.getJSONObject("arguments")}" }) { args -> graph.skillPackages.requireSkill(args.getString("skillId"), binding.projectBinding?.id, true); JSONObject().put("executionId", graph.skills.start(binding.workspace.id, args.getString("skillId"), args.getJSONObject("arguments"))) }
         add("frida_attach", "Attach user-installed frida-inject to an explicit PID with JavaScript. Requires actual device injector/permissions; no BeanShell conversion. Stop with stop_execution.", mapOf("pid" to "integer", "source" to "string", "binary" to "string", "root" to "boolean", "timeoutSeconds" to "integer"), listOf("pid", "source", "binary", "root"), true) { args -> JSONObject().put("executionId", graph.frida.start(project.id, args.getInt("pid"), args.getString("source"), args.getString("binary"), args.getBoolean("root"), args.optInt("timeoutSeconds", 3600))) }
         definitions += ReleaseTools(graph).definitions(binding)
+        definitions += GitHubAuthorTools(graph).definitions(binding)
         definitions += WorkflowTools(graph).definitions(binding)
         if (binding.projectBinding != null) definitions += NativeTools(graph).definitions(binding)
         definitions += WorkspaceTools(graph, binding).definitions()
