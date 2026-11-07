@@ -14,6 +14,32 @@ import java.io.File
 class DebugConnectionDeviceTest {
     @get:Rule val visible = VisibleActivityRule()
 
+    @Test fun deferredCleanupDuringReloadKeepsTargetConnected() = runBlocking<Unit>(Dispatchers.IO) {
+        val graph = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as EasylspApp
+        val pluginId = requireNotNull(InstrumentationRegistry.getArguments().getString("reloadPluginId"))
+        ActivityScenario.launch(MainActivity::class.java).use {
+            withTimeout(15000) { graph.framework.state.first { it.compatible } }
+            val plugin = requireNotNull(graph.store.dao.plugin(pluginId))
+            val project = requireNotNull(graph.store.dao.project(plugin.projectId))
+            val tools = graph.tools.builtins(RunBinding(project, project.sampleRevision, null, "deferred-cleanup-test"))
+            suspend fun call(name: String, args: JSONObject = JSONObject()) = tools.first { it.name == name }.invoke(args)
+            val started = call("start_target", JSONObject().put("restart", true))
+            assertTrue(started.toString(), started.getJSONArray("sessions").length() > 0)
+            val first = graph.bridge.sessions.value.values.first { it.processName == project.packageName }
+            val reloaded = call("plugin_action", JSONObject().put("pluginId", pluginId).put("sessionId", first.id).put("operation", "reloadPlugin"))
+            assertEquals("RUNNING", reloaded.getString("state"))
+            // Drain the target main queue after onUnload's posted cleanup before pinging.
+            val result = call("debug_target_once", JSONObject().put("sessionId", first.id).put("source",
+                "java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1); " +
+                    "new android.os.Handler(android.os.Looper.getMainLooper()).post(new Runnable(){public void run(){done.countDown();}}); " +
+                    "if (!done.await(2, java.util.concurrent.TimeUnit.SECONDS)) throw new IllegalStateException(\"main queue did not drain\"); 6 * 7;"))
+            assertEquals(42, result.getInt("result"))
+            assertEquals(first.pid, graph.bridge.sessions.value[first.id]?.pid)
+            File(graph.filesDir, "deferred-cleanup-evidence.json").writeText(JSONObject()
+                .put("target", graph.bridge.identity(first)).put("reload", reloaded).put("scriptResult", 42).toString(2))
+        }
+    }
+
     @Test fun targetWithoutManagerVisibilityCanRestartReconnectAndExecute() = runBlocking<Unit>(Dispatchers.IO) {
         val graph = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as EasylspApp
         ActivityScenario.launch(MainActivity::class.java).use {

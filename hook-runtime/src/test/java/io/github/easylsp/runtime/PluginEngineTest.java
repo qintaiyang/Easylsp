@@ -76,8 +76,10 @@ public class PluginEngineTest {
         try { load(1, source); fail("must report script error"); } catch (bsh.EvalError expected) { assertEquals(0, driver.hooks.size()); assertTrue(states.contains("ERROR:1")); }
     }
     @Test public void failingOnUnloadStillReleasesHandles() throws Throwable {
-        String source = script("after", "p.setResult(Integer.valueOf(11));").replace("plugin.log(\"unloaded\");", "throw new RuntimeException(\"unload failed\");");
+        String source = "int cleanupAttempts = 0; " + script("after", "p.setResult(Integer.valueOf(11));").replace("plugin.log(\"unloaded\");", "if (cleanupAttempts++ == 0) throw new RuntimeException(\"unload failed\");");
         load(1, source); try { engine.unload("demo"); fail("must surface failure"); } catch (bsh.EvalError expected) { assertEquals(5, driver.add()); assertEquals(0, driver.hooks.size()); }
+        engine.report("demo"); assertEquals("ERROR:1", states.get(states.size() - 1));
+        engine.unload("demo"); assertEquals("STOPPED:1", states.get(states.size() - 1));
     }
     @Test public void overloadResolutionIsExact() throws Throwable {
         load(1, script("replace", "p.setResult(Integer.valueOf(42));"));

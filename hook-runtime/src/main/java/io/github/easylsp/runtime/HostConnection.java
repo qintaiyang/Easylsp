@@ -228,6 +228,6 @@ public final class HostConnection implements ServiceConnection, PluginEngine.Eve
         String message = event.getString("message");
         if ("log".equals(event.getString("type")) && message != null && message.length() > 16000) event.putString("message", message.substring(0, 16000) + "\n[单条日志已截断]");
         try { current.publish(currentSession, event); }
-        catch (RemoteException error) { Log.e("Easylsp", "事件上报失败", error); }
+        catch (RemoteException | SecurityException error) { Log.e("Easylsp", "事件上报失败", error); }
     }
 }

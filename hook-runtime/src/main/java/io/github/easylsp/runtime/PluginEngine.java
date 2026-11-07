@@ -14,7 +14,16 @@ public final class PluginEngine {
         void state(String pluginId, long revision, String instanceId, String state, String error);
         void log(String pluginId, long revision, String instanceId, String level, String message, Throwable error);
     }
-    private record Instance(long revision, String id, Interpreter interpreter, PluginHooks hooks) {}
+    private static final class Instance {
+        final long revision;
+        final String id;
+        final Interpreter interpreter;
+        final PluginHooks hooks;
+        boolean unloadCompleted;
+        Instance(long revision, String id, Interpreter interpreter, PluginHooks hooks) {
+            this.revision = revision; this.id = id; this.interpreter = interpreter; this.hooks = hooks;
+        }
+    }
     private final Map<String, Instance> instances = new HashMap<>();
     private final Map<String, String> cleanupFailures = new HashMap<>();
     private final HookDriver driver;
@@ -62,7 +71,7 @@ public final class PluginEngine {
             events.state(pluginId, revision, id, "RUNNING", "");
         } catch (Throwable error) {
             try { hooks.close(); } catch (Throwable cleanup) { error.addSuppressed(cleanup); }
-            if (hooks.size() == 0) { interpreter.getNameSpace().clear(); System.getProperties().remove("io.github.easylsp.active-plugin." + pluginId, this); }
+            if (hooks.size() == 0) { System.getProperties().remove("io.github.easylsp.active-plugin." + pluginId, this); }
             else { instances.put(pluginId, candidate); cleanupFailures.put(pluginId, error.toString()); }
             events.state(pluginId, revision, id, "ERROR", error.toString());
             logger.write("ERROR", "加载失败", error);
@@ -73,12 +82,19 @@ public final class PluginEngine {
         Instance current = instances.get(pluginId);
         if (current == null) { events.state(pluginId, 0, "", "STOPPED", ""); return; }
         Throwable failure = null;
-        try { if (!cleanupFailures.containsKey(pluginId)) invoke(current, "onUnload"); }
+        try {
+            if (!current.unloadCompleted) {
+                invoke(current, "onUnload");
+                current.unloadCompleted = true;
+            }
+        }
         catch (Throwable error) { failure = error; events.log(pluginId, current.revision, current.id, "ERROR", "onUnload 失败", error); }
         try { current.hooks.close(); }
         catch (Throwable error) { if (failure == null) failure = error; else failure.addSuppressed(error); }
-        if (current.hooks.size() == 0) {
-            instances.remove(pluginId); System.getProperties().remove("io.github.easylsp.active-plugin." + pluginId, this); cleanupFailures.remove(pluginId); current.interpreter.getNameSpace().clear();
+        if (current.hooks.size() == 0 && failure == null) {
+            // onUnload may post cleanup to another thread. Its callbacks still own the
+            // namespace; let GC release it after those references are gone.
+            instances.remove(pluginId); System.getProperties().remove("io.github.easylsp.active-plugin." + pluginId, this); cleanupFailures.remove(pluginId);
         } else cleanupFailures.put(pluginId, failure.toString());
         events.state(pluginId, current.revision, current.id, failure == null ? "STOPPED" : "ERROR", failure == null ? "" : failure.toString());
         if (failure != null) throw failure;

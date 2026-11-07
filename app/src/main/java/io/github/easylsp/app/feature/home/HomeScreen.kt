@@ -9,6 +9,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -27,7 +28,13 @@ import kotlinx.coroutines.launch
     val scope by vm.graph.framework.scope.collectAsStateWithLifecycle()
     val plugins by vm.plugins.collectAsStateWithLifecycle()
     val projects by vm.projects.collectAsStateWithLifecycle()
+    val update by vm.managerUpdate.collectAsStateWithLifecycle()
+    val uriHandler = LocalUriHandler.current
     val jobs = rememberCoroutineScope()
+    LifecycleResumeEffect(Unit) {
+        vm.checkManagerUpdate()
+        onPauseOrDispose { }
+    }
     LifecycleResumeEffect(root.granted, framework.compatible) {
         val refresh = jobs.launch(Dispatchers.IO) {
             if (root.granted) vm.graph.nativeHost.refresh()
@@ -76,7 +83,16 @@ import kotlinx.coroutines.launch
         }
         item {
             AppCard {
-                OverviewInfo("管理器版本", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Box(Modifier.weight(1f)) {
+                        OverviewInfo("管理器版本", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+                    }
+                    update?.let { release ->
+                        TextButton(onClick = { uriHandler.openUri(release.url) }, modifier = Modifier.testTag("manager-upgrade")) {
+                            Text("升级 ${release.version}")
+                        }
+                    }
+                }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 OverviewInfo("引擎版本", engine)
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)

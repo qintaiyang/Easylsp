@@ -7,6 +7,92 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class PluginLifecycleReviewTest {
     public static class Target { public int value() { return 1; } }
+    public static class CleanupProbe {
+        public int active;
+        public int attempts;
+        public boolean fail = true;
+        public void acquire() { active++; }
+        public void release() {
+            attempts++;
+            if (fail) throw new IllegalStateException("cleanup failed");
+            active--;
+        }
+    }
+    private PluginEngine engine(HookDriver driver, Object context, java.util.List<String> states) {
+        return new PluginEngine(driver, getClass().getClassLoader(), context, new PluginEngine.Events() {
+            public void state(String id,long rev,String instance,String state,String error) { states.add(state); }
+            public void log(String id,long rev,String instance,String level,String message,Throwable error) {}
+        });
+    }
+    @Test public void failedOnUnloadCanBeRetriedWithoutInstallingAnotherInstance() throws Throwable {
+        CleanupProbe context = new CleanupProbe();
+        java.util.List<String> states = new java.util.ArrayList<>();
+        PluginEngine engine = engine((member, mode, callback) -> () -> {}, context, states);
+        String source = "void onLoad(){context.acquire();} void onUnload(){context.release();}";
+        try {
+            engine.load("retry-cleanup", 1, new StringReader(source));
+            assertThrows(bsh.EvalError.class, () -> engine.unload("retry-cleanup"));
+            engine.report("retry-cleanup");
+            assertEquals("ERROR", states.get(states.size() - 1));
+            assertThrows(IllegalStateException.class, () -> engine.load("retry-cleanup", 1, new StringReader(source)));
+            context.fail = false;
+            engine.unload("retry-cleanup");
+            assertEquals(2, context.attempts);
+            assertEquals(0, context.active);
+        } finally { context.fail = false; engine.close(); }
+    }
+    @Test public void retryingFailedUnhookDoesNotRepeatSuccessfulOnUnload() throws Throwable {
+        CleanupProbe context = new CleanupProbe(); context.fail = false;
+        AtomicInteger attempts = new AtomicInteger();
+        PluginEngine engine = engine((member, mode, callback) -> () -> {
+            if (attempts.incrementAndGet() == 1) throw new IllegalStateException("unhook failed");
+        }, context, new java.util.ArrayList<>());
+        try {
+            engine.load("retry-unhook", 1, new StringReader(
+                "void onLoad(){context.acquire(); hook.before(\"" + Target.class.getName() + "\",\"value\",new String[0],new HookCallback(){public void call(HookParam p){}});} void onUnload(){context.release();}"));
+            assertThrows(IllegalStateException.class, () -> engine.unload("retry-unhook"));
+            engine.unload("retry-unhook");
+            assertEquals(2, attempts.get());
+            assertEquals(1, context.attempts);
+            assertEquals(0, context.active);
+        } finally { engine.close(); }
+    }
+    public static class DeferredCleanup {
+        public final java.util.List<Runnable> pending = new java.util.ArrayList<>();
+        public final java.util.List<Integer> completed = new java.util.ArrayList<>();
+        public void post(Runnable runnable) { pending.add(runnable); }
+        public void record(int value) { completed.add(value); }
+        public void drain() {
+            for (Runnable runnable : java.util.List.copyOf(pending)) runnable.run();
+            pending.clear();
+        }
+    }
+    @Test public void deferredUnloadKeepsItsOwnNamespaceAcrossReload() throws Throwable {
+        DeferredCleanup context = new DeferredCleanup();
+        AtomicInteger hooks = new AtomicInteger();
+        PluginEngine engine = new PluginEngine((member, mode, callback) -> {
+            hooks.incrementAndGet(); return hooks::decrementAndGet;
+        }, getClass().getClassLoader(), context, new PluginEngine.Events() {
+            public void state(String id,long rev,String instance,String state,String error) {}
+            public void log(String id,long rev,String instance,String level,String message,Throwable error) {}
+        });
+        String source = "import java.util.concurrent.atomic.AtomicInteger; "
+            + "AtomicInteger value = new AtomicInteger(VALUE); "
+            + "void finish() { context.record(value.get()); } "
+            + "void onLoad() { hook.before(\"" + Target.class.getName() + "\",\"value\",new String[0],new HookCallback(){ public void call(HookParam p) {} }); } "
+            + "void onUnload() { context.post(new Runnable(){ public void run(){ AtomicInteger copy = new AtomicInteger(value.get()); finish(); } }); }";
+        try {
+            engine.load("deferred-unload", 1, new StringReader(source.replace("VALUE", "1")));
+            engine.reload("deferred-unload", 2, new StringReader(source.replace("VALUE", "2")));
+            assertEquals(1, hooks.get());
+            context.drain();
+            assertEquals(java.util.List.of(1), context.completed);
+            engine.unload("deferred-unload");
+            assertEquals(0, hooks.get());
+            context.drain();
+            assertEquals(java.util.List.of(1, 2), context.completed);
+        } finally { engine.close(); }
+    }
     @Test public void failedUnhookRetainsOnlyRemainingHandle() throws Throwable {
         AtomicInteger installs = new AtomicInteger(), attempts = new AtomicInteger();
         HookDriver driver = (member, mode, callback) -> { int id = installs.incrementAndGet(); return () -> { attempts.incrementAndGet(); if (id == 2) throw new IllegalStateException("backend"); }; };

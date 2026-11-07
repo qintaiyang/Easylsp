@@ -23,6 +23,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val logs = graph.logs.lines
     val busy = MutableStateFlow(false)
     val messages = MutableSharedFlow<String>()
+    val managerUpdate = MutableStateFlow<io.github.easylsp.app.platform.ManagerUpdate?>(null)
+    private val managerUpdates = io.github.easylsp.app.platform.ManagerUpdates()
+    private var updateCheck: Job? = null
     data class InstalledApp(val packageName: String, val name: String, val version: String, val system: Boolean, val installedAt: Long = 0, val updatedAt: Long = 0)
     val installed = MutableStateFlow<List<InstalledApp>>(emptyList())
     init {
@@ -34,6 +37,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         refreshApps()
+    }
+    fun checkManagerUpdate() {
+        if (updateCheck?.isActive == true || managerUpdate.value != null) return
+        updateCheck = viewModelScope.launch {
+            try { managerUpdate.value = managerUpdates.check(BuildConfig.VERSION_NAME) }
+            catch (error: Exception) {
+                if (error is CancellationException) throw error
+                android.util.Log.w("Easylsp", "管理器版本检测失败", error)
+            }
+        }
     }
     fun action(block: suspend () -> String) {
         if (busy.value) return
