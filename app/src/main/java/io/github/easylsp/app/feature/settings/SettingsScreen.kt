@@ -91,15 +91,6 @@ import kotlinx.coroutines.withContext
                     ListItem(headlineContent = { Text("优先使用 root") }, trailingContent = { Switch(preferred, { value -> vm.action { withContext(Dispatchers.IO) { vm.graph.root.prefer(value) }; if (value) vm.graph.root.refresh(); "执行偏好已保存" } }) })
                     Button(onClick = { vm.action { vm.graph.root.refresh().await().detail } }) { Text("检测 / 申请 root") }
                 }
-                val linuxStatus by vm.graph.linux.status.collectAsStateWithLifecycle()
-                val linuxProgress by vm.graph.linux.progress.collectAsStateWithLifecycle()
-                AppCard {
-                    Text("Linux 环境", style = MaterialTheme.typography.titleMedium)
-                    Text(linuxStatus)
-                    if (linuxProgress > 0f && linuxProgress < 1f) LinearProgressIndicator(progress = { linuxProgress }, modifier = Modifier.fillMaxWidth())
-                    Text("Ubuntu 24.04 arm64 · chroot 内用户为 root；设备 su 授权单独显示。AI 会按任务需要安装 Python、Node 等运行时。", style = MaterialTheme.typography.bodySmall)
-                    TextButton(enabled = !vm.graph.linux.installed, onClick = { vm.action { vm.graph.linux.install(); "Ubuntu 已安装" } }) { Text("安装 Ubuntu") }
-                }
                 val harness = vm.graph.harness
                 BackgroundPermissionsCard(vm.graph)
                 ManagerKeepaliveCard(vm)
@@ -110,13 +101,12 @@ import kotlinx.coroutines.withContext
                     vm.action { io.github.easylsp.app.platform.harness.HarnessExecutionService.start(vm.graph); "正在连接会话宿主" }
                 }
                 AppCard {
-                    Text("AI 会话环境", style = MaterialTheme.typography.titleMedium)
+                    Text("AI 服务管理", style = MaterialTheme.typography.titleMedium)
                     Text(harnessStatus)
                     Text(serviceStatus, style = MaterialTheme.typography.bodySmall)
-                    Text("首次安装需要联网。会话由 Harness 执行，前台通知和悬浮圈可在离开页面后保持任务入口。", style = MaterialTheme.typography.bodySmall)
+                    Text("环境会在首次使用 AI 时自动准备。前台通知和悬浮圈可在离开页面后保持任务入口。", style = MaterialTheme.typography.bodySmall)
                     if (harnessBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
                     Row(Modifier.horizontalScroll(rememberScrollState())) {
-                        TextButton(enabled = vm.graph.linux.installed && !harnessBusy, onClick = { vm.action { harness.install(); "Harness 已安装" } }) { Text("安装 / 更新") }
                         TextButton(enabled = harness.installed && !harnessBusy, onClick = {
                             if (android.os.Build.VERSION.SDK_INT >= 33) notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
                             else vm.action { io.github.easylsp.app.platform.harness.HarnessExecutionService.start(vm.graph); "正在连接会话宿主" }

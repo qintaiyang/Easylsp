@@ -7,6 +7,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -84,6 +85,7 @@ import java.io.File
         "editor/{projectId}/{pluginId}?signature={signature}" -> plugins.firstOrNull { it.id == entry?.arguments?.getString("pluginId") }?.name ?: "编辑插件"
         "logs/{projectId}?session={session}&plugin={plugin}" -> "项目日志"
         "chat/{conversationId}?session={session}" -> "AI 助手"
+        "conversation-terminal/{conversationId}" -> "工作区"
         else -> entry?.arguments?.getString("title") ?: "Easylsp"
     }
     Scaffold(
@@ -145,7 +147,15 @@ import java.io.File
                     conversation?.let { row ->
                         val workspace = io.github.easylsp.app.platform.terminal.Workspace(row.projectId ?: row.id, row.scope)
                         LaunchedEffect(workspace) { withContext(Dispatchers.IO) { vm.graph.executions.bind(workspace) } }
-                        io.github.easylsp.app.feature.p3.TerminalScreen(vm, projects.firstOrNull { it.id == row.projectId }, workspaceId = workspace.id)
+                        var files by rememberSaveable(id) { mutableStateOf(true) }
+                        Column(Modifier.fillMaxSize()) {
+                            Row {
+                                TextButton(onClick = { files = true }) { Text("文件") }
+                                TextButton(onClick = { files = false }) { Text("终端") }
+                            }
+                            if (files) io.github.easylsp.app.feature.p3.WorkspaceFilesScreen(vm, workspace.id, row.projectId != null) { name, text, language -> viewer(name, text, language) }
+                            else io.github.easylsp.app.feature.p3.TerminalScreen(vm, projects.firstOrNull { it.id == row.projectId }, workspaceId = workspace.id)
+                        }
                     }
                 }
                 composable("chat/{conversationId}?session={session}") { item ->

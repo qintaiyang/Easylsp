@@ -29,7 +29,11 @@ import java.util.Locale
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val graph = application as EasylspApp
     val error = MutableStateFlow("")
-    fun create(project: ProjectEntity, provider: ProviderEntity, done: (String) -> Unit) { viewModelScope.launch {
+    val creating = MutableStateFlow(false)
+    fun create(project: ProjectEntity, provider: ProviderEntity, done: (String) -> Unit) {
+        if (creating.value) return
+        creating.value = true
+        viewModelScope.launch {
         try {
             val id = withContext(Dispatchers.IO) {
                 val model = graph.models.resolve(provider.id)
@@ -41,6 +45,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             done(id)
         } catch (failure: CancellationException) { throw failure }
         catch (failure: Exception) { error.value = failure.message ?: failure.toString() }
+        finally { creating.value = false }
     } }
     fun rename(id: String, name: String) { viewModelScope.launch(Dispatchers.IO) { graph.store.workflows.renameConversation(id, name.trim(), System.currentTimeMillis()) } }
     fun delete(projectId: String, id: String) { viewModelScope.launch(Dispatchers.IO) {
@@ -66,6 +71,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     var archived by rememberSaveable(project.id) { mutableStateOf(false) }
     val conversations = loadedConversations.orEmpty().filter { it.archived == archived && it.parentConversationId == null }
     val managementError by vm.error.collectAsStateWithLifecycle()
+    val creating by vm.creating.collectAsStateWithLifecycle()
+    val linuxStatus by vm.graph.linux.status.collectAsStateWithLifecycle()
+    val harnessStatus by vm.graph.harness.status.collectAsStateWithLifecycle()
     val active by vm.graph.chat.activeConversation.collectAsStateWithLifecycle()
     var configureModel by remember { mutableStateOf(false) }
     var sampleStatus by remember { mutableStateOf("") }
@@ -96,7 +104,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         Row(Modifier.padding(horizontal = 16.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             providers.forEach { provider -> FilterChip((providerId ?: providers.firstOrNull()?.id) == provider.id, { providerId = provider.id }, label = { Text(provider.name) }) }
         }
-        Button(enabled = providers.isNotEmpty() && project.sampleRevision > 0, onClick = { vm.create(project, providers.firstOrNull { it.id == providerId } ?: providers.first(), open) }, modifier = Modifier.padding(horizontal = 16.dp)) { Text("准备并开始") }
+        Button(enabled = !creating && providers.isNotEmpty() && project.sampleRevision > 0, onClick = { vm.create(project, providers.firstOrNull { it.id == providerId } ?: providers.first(), open) }, modifier = Modifier.padding(horizontal = 16.dp)) { Text(if (creating) "正在准备…" else "开始新会话") }
+        if (creating) {
+            LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 16.dp))
+            Text(if (!vm.graph.linux.installed) linuxStatus else harnessStatus, modifier = Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall)
+        }
         if (providers.isEmpty()) EmptyState("连接你的 AI", "选择供应商并填写 API Key，获取模型并识别能力。之后直接描述想实现的效果。", "连接 AI", { configureModel = true })
         else if (project.sampleRevision == 0L) {
             if (preparing) LoadingState(sampleStatus)

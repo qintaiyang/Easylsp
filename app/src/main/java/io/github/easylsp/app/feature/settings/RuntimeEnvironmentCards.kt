@@ -1,6 +1,8 @@
 package io.github.easylsp.app.feature.settings
 
 import androidx.compose.material3.*
+import androidx.compose.foundation.layout.*
+import androidx.compose.ui.Modifier
 import androidx.compose.runtime.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.easylsp.app.MainViewModel
@@ -9,6 +11,7 @@ import io.github.easylsp.app.ui.components.*
 
 @Composable internal fun RuntimeEnvironmentCards(vm: MainViewModel) {
     val preparation by vm.graph.harness.preparationId.collectAsStateWithLifecycle()
+    val linuxStatus by vm.graph.linux.status.collectAsStateWithLifecycle()
     val preparationStatus by vm.graph.harness.status.collectAsStateWithLifecycle()
     val executions by vm.graph.executions.store.records.collectAsStateWithLifecycle()
     val execution = executions.firstOrNull { it.id == preparation }
@@ -21,13 +24,20 @@ import io.github.easylsp.app.ui.components.*
         nextOffset = page?.takeUnless { it.isNull("nextOffset") }?.getInt("nextOffset")
     }
     AppCard {
-        Text("准备 AI 环境", style = MaterialTheme.typography.titleLarge)
+        Text("AI 环境", style = MaterialTheme.typography.titleLarge)
+        Text("首次开始聊天会自动准备所需环境，也可以在这里提前准备。自动测速选择下载源，无需分别安装 Ubuntu 和 Harness。")
+        Text(linuxStatus)
         Text(preparationStatus)
-        execution?.let { Text("任务 ${it.id} · ${it.state}") }
-        TextButton(onClick = { vm.action { vm.graph.harness.prepare(); "准备任务已启动；已完成阶段会复用" } }) { Text("准备 / 继续未完成步骤") }
-        if (preparationLog.isNotEmpty()) Text(preparationLog)
-        if (offset > 0) TextButton(onClick = { offset = 0 }) { Text("从头查看") }
-        nextOffset?.let { next -> TextButton(onClick = { offset = next }) { Text("后续日志") } }
+        execution?.let { Text("准备状态：${io.github.easylsp.app.feature.chat.statusName(it.state)}") }
+        if (execution?.state == "RUNNING") LinearProgressIndicator(Modifier.fillMaxWidth())
+        Button(enabled = execution?.state != "RUNNING", onClick = { vm.action { vm.graph.harness.prepare(); "准备任务已启动；已完成阶段会复用" } }) { Text(if (execution?.state in listOf("ERROR", "TIMEOUT", "INTERRUPTED", "CANCELLED")) "继续准备" else "一键准备 AI 环境") }
+        var showLog by remember { mutableStateOf(false) }
+        if (preparationLog.isNotEmpty()) TextButton(onClick = { showLog = !showLog }) { Text(if (showLog) "收起安装日志" else "查看安装日志") }
+        if (showLog) {
+            Text(preparationLog)
+            if (offset > 0) TextButton(onClick = { offset = 0 }) { Text("从头查看") }
+            nextOffset?.let { next -> TextButton(onClick = { offset = next }) { Text("后续日志") } }
+        }
     }
     val framework by vm.graph.framework.state.collectAsStateWithLifecycle()
     val nativeHost by vm.graph.nativeHost.state.collectAsStateWithLifecycle()

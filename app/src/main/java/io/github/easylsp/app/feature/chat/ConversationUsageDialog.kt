@@ -56,7 +56,7 @@ import org.json.JSONObject
                 TextButton(onClick = { showPlan = !showPlan }) { Text("任务计划 ${plan.count { it.status == "completed" }}/${plan.size}") }
                 if (showPlan) plan.forEach { Text("${it.status} · ${it.description}") }
             }
-            TextButton(onClick = openTerminal) { Text("打开会话终端") }
+            TextButton(onClick = openTerminal) { Text("打开工作区 / 终端") }
             TextButton(onClick = { settings = !settings }) { Text("会话设置 · " + if (conversation.authorizationMode == "ALLOW") "允许修改并运行" else "单独确认") }
             if (settings) {
                 TextButton(onClick = { setMode(true) }) { Text("允许修改并运行") }

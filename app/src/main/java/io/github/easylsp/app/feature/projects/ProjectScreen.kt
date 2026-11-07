@@ -40,6 +40,7 @@ import io.github.easylsp.app.ui.components.*
             StatusBadge(if (project.kind == "IMPORTED") "静态项目" else if (host != null) "目标在线" else "目标离线", host != null)
         }
         Row(Modifier.padding(horizontal = 12.dp)) {
+            TextButton(onClick = { tab = "workspace" }) { Icon(AppIcons.FolderOpen, null); Text("打开工作区") }
             TextButton(onClick = { advanced = !advanced; if (!advanced) tab = "chat" }) { Text(if (advanced) "收起高级工具" else "高级工具") }
             TextButton(onClick = { advanced = true; tab = "diagnostics" }) { Text("启动诊断") }
         }
@@ -60,8 +61,8 @@ import io.github.easylsp.app.ui.components.*
                 }
             }
         }
-        val tabs = if (!advanced) listOf("chat" to "AI 助手") else if (project.kind == "INSTALLED") listOf("plugins" to "插件", "analysis" to "分析", "diagnostics" to "诊断", "chat" to "聊天", "inspect" to "检视", "workspace" to "工作台") else listOf("analysis" to "分析", "diagnostics" to "诊断", "chat" to "聊天", "workspace" to "工作台")
-        if (advanced) ScrollableTabRow(selectedTabIndex = tabs.indexOfFirst { it.first == tab }.coerceAtLeast(0), edgePadding = 8.dp) {
+        val tabs = if (!advanced) listOf("chat" to "AI 助手", "workspace" to "工作区") else if (project.kind == "INSTALLED") listOf("plugins" to "插件", "analysis" to "分析", "diagnostics" to "诊断", "chat" to "聊天", "inspect" to "检视", "workspace" to "工作区") else listOf("analysis" to "分析", "diagnostics" to "诊断", "chat" to "聊天", "workspace" to "工作区")
+        ScrollableTabRow(selectedTabIndex = tabs.indexOfFirst { it.first == tab }.coerceAtLeast(0), edgePadding = 8.dp) {
             tabs.forEach { (id, label) -> Tab(tab == id, { tab = id }, text = { Text(label) }) }
         }
         Spacer(Modifier.height(8.dp))

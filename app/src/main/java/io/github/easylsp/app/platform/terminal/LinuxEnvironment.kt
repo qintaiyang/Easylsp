@@ -1,14 +1,13 @@
 package io.github.easylsp.app.platform.terminal
 
 import io.github.easylsp.app.EasylspApp
-import io.github.easylsp.app.platform.network.HttpCalls
+import io.github.easylsp.app.platform.network.RuntimeDownload
+import io.github.easylsp.app.platform.network.RuntimeSources
 import io.github.easylsp.app.platform.root.RootCommand
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
-import okhttp3.*
 import org.json.JSONObject
 import java.io.File
-import java.util.concurrent.TimeUnit
 
 /** An explicit Ubuntu base installation, separate from Android root permission and the app UID. */
 class LinuxEnvironment(private val graph: EasylspApp) {
@@ -18,32 +17,30 @@ class LinuxEnvironment(private val graph: EasylspApp) {
     val status = MutableStateFlow(if (marker.exists()) "Ubuntu 已安装" else "尚未安装 Ubuntu")
     val progress = MutableStateFlow(0f)
     val installed get() = marker.exists()
-    private val source = "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.3-base-arm64.tar.gz"
-    suspend fun install(): JSONObject = withContext(Dispatchers.IO) {
+    suspend fun install(output: (String) -> Unit = {}): JSONObject = withContext(Dispatchers.IO) {
         require(graph.root.useRoot()) { "安装 chroot 环境需要设备 su 授权，请在 root 管理器允许 Easylsp" }
         require(!installed) { "Ubuntu 已安装" }
-        val archive = File(graph.cacheDir, "ubuntu-base-arm64.tar.gz")
+        val archive = File(graph.filesDir, "linux/ubuntu-base-arm64.tar.gz").apply { parentFile!!.mkdirs() }
         try {
+            val source = if (archive.exists()) RuntimeSources.ubuntu.first().url else RuntimeSources().fastest("Ubuntu", RuntimeSources.ubuntu) { status.value = it.trim(); output(it) }.url
             status.value = "下载 Ubuntu 24.04 arm64…"; progress.value = 0f
-            val client = OkHttpClient.Builder().retryOnConnectionFailure(false).callTimeout(10, TimeUnit.MINUTES).build()
-            val downloadContext = currentCoroutineContext()
-            HttpCalls.execute(client, Request.Builder().url(source).build()) { response ->
-                val body = requireNotNull(response.body); val length = body.contentLength()
-                body.byteStream().use { input -> archive.outputStream().use { output ->
-                    val buffer = ByteArray(65536); var read = 0L
-                    while (true) { downloadContext.ensureActive(); val n = input.read(buffer); if (n < 0) break; output.write(buffer, 0, n); read += n; if (length > 0) progress.value = read.toFloat() / length }
-                } }
+            RuntimeDownload.fetch(source, archive, File(archive.parentFile, "ubuntu-download.partial")) { received, total ->
+                progress.value = if (total > 0) received.toFloat() / total else 0f
+                status.value = "下载 Ubuntu 24.04 · ${RuntimeDownload.label(received, total)}"
+                output(status.value + "\n")
             }
             status.value = "解压 Ubuntu 文件系统…"
+            output(status.value + "\n")
             // A failed install can leave absolute rootfs symlinks that Android tar refuses to overwrite.
             runRoot("rm -rf ${q(root.path)}; mkdir -p ${q(root.path)}; tar -xpf ${q(archive.path)} -C ${q(root.path)}; mkdir -p ${q(root.path + "/proc")} ${q(root.path + "/sys")} ${q(root.path + "/dev")} ${q(root.path + "/workspace")}; printf 'nameserver 1.1.1.1\\nnameserver 8.8.8.8\\n' > ${q(root.path + "/etc/resolv.conf")}; printf '127.0.0.1 localhost\\n::1 localhost\\n' > ${q(root.path + "/etc/hosts")}")
             runRoot("chroot ${q(root.path)} /bin/bash -c 'test -x /usr/bin/apt-get && /usr/bin/id && /bin/cat /etc/os-release'")
             val info = JSONObject().put("distribution", "Ubuntu 24.04.3 arm64").put("source", source).put("installedAt", System.currentTimeMillis()).put("backend", "chroot")
             marker.parentFile!!.mkdirs(); marker.writeText(info.toString())
             status.value = "Ubuntu 已安装 · chroot 内用户 root"; progress.value = 1f
+            output(status.value + "\n")
             info
         } catch (e: Exception) { status.value = "安装未完成：${e.message}"; throw e }
-        finally { archive.delete() }
+        finally { if (installed) archive.delete() }
     }
     private fun q(text: String) = RootCommand.quote(text)
     /** Global runtime commands have no project workspace; all mounts stay in the root child. */

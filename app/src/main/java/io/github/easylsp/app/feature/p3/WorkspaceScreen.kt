@@ -30,7 +30,7 @@ import java.io.File
     val providers by remember { graph.models.available() }.collectAsStateWithLifecycle(emptyList())
     val skills by remember { graph.store.workflows.observeSkills() }.collectAsStateWithLifecycle(emptyList())
     val plugins by vm.plugins.collectAsStateWithLifecycle()
-    var tab by rememberSaveable(project.id) { mutableStateOf("终端") }
+    var tab by rememberSaveable(project.id) { mutableStateOf("文件") }
     var command by rememberSaveable(project.id) { mutableStateOf("pwd; id") }
     var cwd by rememberSaveable(project.id) { mutableStateOf(".") }
     var timeout by rememberSaveable(project.id) { mutableStateOf("120") }
@@ -61,16 +61,17 @@ import java.io.File
     val saveApk = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/vnd.android.package-archive")) { uri ->
         if (uri != null) vm.action { withContext(Dispatchers.IO) { requireNotNull(apk).inputStream().use { input -> requireNotNull(graph.contentResolver.openOutputStream(uri)).use { input.copyTo(it) } } }; "APK 已保存" }
     }
-    if (tab == "PTY" || tab == "Linux") {
+    if (tab == "文件" || tab == "PTY" || tab == "Linux") {
         Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
             TextButton(onClick = { tab = "终端" }) { Text("返回工作台") }
-            TerminalScreen(vm, project, tab == "Linux")
+            if (tab == "文件") WorkspaceFilesScreen(vm, project.id, true, openOutput)
+            else TerminalScreen(vm, project, tab == "Linux")
         }
         return
     }
     Column(Modifier.fillMaxSize().padding(12.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text("root：${rootState.status} · ${if (rootPreferred && rootState.granted) "优先 root 执行" else "应用 UID / 未授权"}", fontSize = 12.sp)
-        Row(Modifier.horizontalScroll(rememberScrollState())) { listOf("终端", "PTY", "Linux", "Skills", "子任务", "Frida", "APK").forEach { name -> FilterChip(tab == name, { tab = name }, label = { Text(name) }) } }
+        Row(Modifier.horizontalScroll(rememberScrollState())) { listOf("文件", "终端", "PTY", "Linux", "Skills", "子任务", "Frida", "APK").forEach { name -> FilterChip(tab == name, { tab = name }, label = { Text(name) }) } }
         when (tab) {
             "终端" -> {
                 Text("命令使用 PTY 执行，与 AI 共用项目空间和记录；PTY 标签可查看和交互。Linux 环境可由 AI 安装与调用。", fontSize = 12.sp)

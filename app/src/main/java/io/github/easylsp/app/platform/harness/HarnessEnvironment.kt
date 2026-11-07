@@ -1,19 +1,16 @@
 package io.github.easylsp.app.platform.harness
 
 import io.github.easylsp.app.EasylspApp
-import io.github.easylsp.app.platform.network.HttpCalls
+import io.github.easylsp.app.platform.network.RuntimeDownload
+import io.github.easylsp.app.platform.network.RuntimeSources
 import io.github.easylsp.app.platform.root.RootCommand
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import org.json.JSONObject
 import java.io.File
 import java.util.UUID
-import java.util.concurrent.TimeUnit
 
 /** Explicit install and host lifecycle, separate from ordinary prompt submission. */
 class HarnessEnvironment(private val graph: EasylspApp) {
@@ -40,10 +37,7 @@ class HarnessEnvironment(private val graph: EasylspApp) {
             preparation.withLock {
                 output("[ROOT] 检查授权\n")
                 require(graph.root.useRoot()) { "请在设备 Root 管理器允许 Easylsp" }
-                if (!graph.linux.installed) coroutineScope {
-                    val watcher = launch { graph.linux.status.collect { output(it + "\n") } }
-                    try { graph.linux.install() } finally { watcher.cancel() }
-                }
+                if (!graph.linux.installed) graph.linux.install(output)
                 if (!installed) { output("[HARNESS] Node / APT / NPM\n"); install(output) }
                 output("[START] 启动宿主\n"); start(output); output("AI 环境已就绪\n")
             }
@@ -56,7 +50,7 @@ class HarnessEnvironment(private val graph: EasylspApp) {
     suspend fun prepareAndWait() {
         val id = prepare()
         val result = graph.executions.await(preparationWorkspace, id)
-        check(result.getString("state") == "COMPLETE") { result.getString("text") }
+        check(result.getString("state") == "COMPLETE") { graph.executions.requireRecord(preparationWorkspace, id).output.ifEmpty { result.getString("text") } }
     }
     suspend fun install(output: (String) -> Unit = {}): Unit = lifecycle.withLock { withContext(Dispatchers.IO) {
         require(graph.linux.installed) { "请先安装 Ubuntu" }
@@ -65,14 +59,17 @@ class HarnessEnvironment(private val graph: EasylspApp) {
         busy.value = true
         val archive = File(directory, "node-v24.11.0-linux-arm64.tar.gz")
         try {
+            val sources = RuntimeSources()
+            fun report(text: String) { status.value = text.trim(); output(text) }
+            val nodeSource = if (archive.exists()) RuntimeSources.node.first() else sources.fastest("Node", RuntimeSources.node, ::report)
             status.value = "下载 Node 24.11.0…"
             output("[DOWNLOAD] Node 24.11.0" + if (archive.exists()) " 使用已下载文件\n" else " 开始下载\n")
-            val client = OkHttpClient.Builder().retryOnConnectionFailure(false).callTimeout(10, TimeUnit.MINUTES).build()
-            if (!archive.exists()) HttpCalls.execute(client, Request.Builder().url("https://nodejs.org/dist/v24.11.0/node-v24.11.0-linux-arm64.tar.gz").build()) { response ->
-                val partial = File(directory, "node-download.partial")
-                requireNotNull(response.body).byteStream().use { input -> partial.outputStream().use { input.copyTo(it) } }
-                check(partial.renameTo(archive)) { "下载完成后无法保存 Node 安装包" }
+            RuntimeDownload.fetch(nodeSource.url, archive, File(directory, "node-download.partial")) { received, total ->
+                status.value = "下载 Node 24.11.0 · ${RuntimeDownload.label(received, total)}"
+                output(status.value + "\n")
             }
+            val aptSource = sources.fastest("APT", RuntimeSources.apt, ::report)
+            val npmSource = sources.fastest("npm", RuntimeSources.npm, ::report)
             val assets = extractAssets()
             status.value = "安装固定 Node 与 Harness…"
             marker.delete()
@@ -81,8 +78,15 @@ class HarnessEnvironment(private val graph: EasylspApp) {
                 export DEBIAN_FRONTEND=noninteractive
                 if [ ! -f /opt/easylsp-apt-ready ]; then
                     echo '[APT] 更新目录并安装依赖'
-                    apt-get update
-                    apt-get install -y ca-certificates libstdc++6
+                    cat > /etc/apt/sources.list.d/ubuntu.sources <<'SOURCES'
+                Types: deb
+                URIs: ${aptSource.url}
+                Suites: noble noble-updates noble-backports noble-security
+                Components: main universe restricted multiverse
+                Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+                SOURCES
+                    apt-get -o Acquire::Languages=none update
+                    apt-get install -y --no-install-recommends ca-certificates libstdc++6
                     touch /opt/easylsp-apt-ready
                 fi
                 mkdir -p /opt/easylsp-node-v24.11.0 /opt/easylsp-harness-next
@@ -91,13 +95,13 @@ class HarnessEnvironment(private val graph: EasylspApp) {
                 cp ${q(assets.path)}/* /opt/easylsp-harness-next/
                 cd /opt/easylsp-harness-next
                 echo '[NPM] 安装 Harness 依赖'
-                npm ci --omit=dev --no-audit --no-fund
+                npm ci --omit=dev --no-audit --no-fund --registry=${q(npmSource.url)} --fetch-retries=0
                 node --input-type=module -e 'import {readFileSync} from "node:fs"; if (process.version !== "v24.11.0" || JSON.parse(readFileSync("node_modules/@deepseek-ai/dsh/package.json")).version !== "0.2.2-alpha.3" || JSON.parse(readFileSync("node_modules/ws/package.json")).version !== "8.22.1") process.exit(1)'
             """.trimIndent(), appFiles = true, timeout = 1800, output = output)
             run("rm -rf /opt/easylsp-harness-previous; if [ -d /opt/easylsp-harness ]; then mv /opt/easylsp-harness /opt/easylsp-harness-previous; fi; mv /opt/easylsp-harness-next /opt/easylsp-harness")
             marker.writeText(JSONObject().put("node", "24.11.0").put("harness", "0.2.2-alpha.3").put("ws", "8.22.1").put("installedAt", System.currentTimeMillis()).toString())
             status.value = "Harness 0.2.2-alpha.3 已安装 · Node 24.11.0"
-        } catch (error: Exception) { status.value = "Harness 安装未完成：${error.message}"; throw error }
+        } catch (error: Exception) { status.value = "Harness 安装未完成：${error.message}；点击继续将复用已下载内容"; throw error }
         finally { if (installed) archive.delete(); busy.value = false }
     } }
     suspend fun start(output: (String) -> Unit = {}): JSONObject = lifecycle.withLock { withContext(Dispatchers.IO) {

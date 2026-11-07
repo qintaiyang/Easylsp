@@ -218,6 +218,7 @@ import io.noties.markwon.Markwon
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             if (back != null) IconButton(onClick = back) { Icon(io.github.easylsp.app.ui.icons.AppIcons.ArrowBack, "返回") }
             Text("${project?.name ?: "快速对话"} · AI 助手", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f), maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+            IconButton(onClick = openTerminal) { Icon(io.github.easylsp.app.ui.icons.AppIcons.FolderOpen, "打开工作区") }
             TextButton(onClick = { choosingModel = true }, modifier = Modifier.widthIn(max = 160.dp), contentPadding = PaddingValues(horizontal = 8.dp)) { Text("${conversation.model} ▾", style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             IconButton(onClick = { headerMenu = true }, modifier = Modifier.semantics { contentDescription = "会话用量与设置" }) {
                 Box(Modifier.size(14.dp).background(androidx.compose.ui.graphics.Color(0xFF49A778), androidx.compose.foundation.shape.CircleShape))
