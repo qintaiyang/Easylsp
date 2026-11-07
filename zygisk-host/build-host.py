@@ -40,7 +40,7 @@ for source, destination in [(out / 'host.so', stage / 'zygisk/arm64-v8a.so'), (o
     shutil.copy2(source, destination)
     subprocess.run([str(toolchain / 'llvm-strip'), '--strip-debug', str(destination)], check=True)
 for name in ['libshadowhook.so', 'libshadowhook_nothing.so', 'libeasylsp_native.so']:
-    destination = stage / 'runtime/0.91/arm64-v8a' / name
+    destination = stage / 'runtime/9.1/arm64-v8a' / name
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(args.runtime / name, destination)
 for name in ['libeasylsp-next.so', 'libeasylsp-hyos.so']:

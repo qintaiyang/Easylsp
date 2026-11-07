@@ -102,7 +102,7 @@ static void event(struct plugin *p, sh_hook_id hook, const char *phase, int code
     uint64_t timestamp = (uint64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
     snprintf(line, sizeof(line), "{\"schema\":1,\"uid\":%u,\"pid\":%u,\"startTicks\":%" PRIu64
         ",\"instanceId\":\"%s\",\"pluginId\":\"%s\",\"buildId\":\"%s\",\"generation\":\"%s\","
-        "\"backend\":\"%s\",\"coreVersion\":\"0.91-engine2.0.1-m7\",\"releaseId\":\"%s\",\"timestamp\":%" PRIu64 ",\"sourceRevision\":%" PRIu64 ",\"sequence\":%" PRIu64 ",\"dropped\":%" PRIu64
+        "\"backend\":\"%s\",\"coreVersion\":\"9.1-engine2.0.1-m7\",\"releaseId\":\"%s\",\"timestamp\":%" PRIu64 ",\"sourceRevision\":%" PRIu64 ",\"sequence\":%" PRIu64 ",\"dropped\":%" PRIu64
         ",\"hookId\":%u,\"phase\":\"%s\",\"code\":%d,\"detail\":\"%s\"}",
         p->context.uid, p->context.pid, p->context.start_ticks, p->instance_id, p->plugin_id, p->build_id,
         p->generation, core_backend ? core_backend : "UNCLAIMED", release, timestamp, p->context.source_revision, seq, atomic_load(&dropped), hook, phase, code, message);

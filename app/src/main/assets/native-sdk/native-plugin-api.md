@@ -38,7 +38,7 @@ Native ZIP：`info.prop` 指定 `formatVersion=2,runtime=native,nativeApiVersion
 
 诊断隔离：ENTRY_ONLY 不加载引擎/用户插件；NATIVE_OBSERVE 只运行内置观测；JAVA_NO_PLUGINS 保留 Java 初始化并抑制用户插件；NORMAL/EXTERNAL_ONLY 按发布策略执行。普通诊断窗口中的用户 Native 事件保存在 native-plugin-events.jsonl。
 
-## 可选 ABI 尾部扩展（0.91 / ShadowHook 2.0.1）
+## 可选 ABI 尾部扩展（9.1 / ShadowHook 2.0.1）
 
 旧函数表前缀和入口不变，旧已编译插件无需重编译。使用新增字段前按 `offsetof + sizeof(field)` 检查 `host->struct_size`；不能仅检查 ABI 版本。
 
