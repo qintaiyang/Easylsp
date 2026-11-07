@@ -28,10 +28,11 @@ jobs:
           umask 077
           mkdir -p "$HOME/.android" "$RUNNER_TEMP/easylsp-signing"
           test -n "$DEBUG_KEYSTORE" && test -n "$RELEASE_KEYSTORE" && test -n "$RELEASE_PROPERTIES"
-          printf '%s' "$DEBUG_KEYSTORE" | base64 --decode > "$HOME/.android/debug.keystore"
+          printf '%s' "$DEBUG_KEYSTORE" | base64 --decode > "$RUNNER_TEMP/easylsp-signing/debug.keystore"
           printf '%s' "$RELEASE_KEYSTORE" | base64 --decode > "$RUNNER_TEMP/easylsp-signing/release.jks"
           printf '%s' "$RELEASE_PROPERTIES" | base64 --decode > "$RUNNER_TEMP/easylsp-signing/release.properties"
           printf '\nstoreFile=%s/easylsp-signing/release.jks\n' "$RUNNER_TEMP" >> "$RUNNER_TEMP/easylsp-signing/release.properties"
+          printf 'ORG_GRADLE_PROJECT_easylspDebugKeystore=%s/easylsp-signing/debug.keystore\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - run: ./gradlew :app:assembleDebug :demo-target:assembleDebug :app:assembleDebugAndroidTest :zygisk-host:assembleHost :hook-runtime:testDebugUnitTest :demo-target:testDebugUnitTest :app:testDebugUnitTest --console=plain --max-workers=2 -Pkotlin.compiler.execution.strategy=in-process
       - name: Build signed release APK
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

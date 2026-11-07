@@ -7,6 +7,7 @@ plugins {
     alias(libs.plugins.kotlin.kapt)
 }
 android {
+    providers.gradleProperty("easylspDebugKeystore").orNull?.let { signingConfigs.getByName("debug").storeFile = file(it) }
     namespace = "io.github.easylsp.app"
     compileSdk = 36
     ndkVersion = "28.2.13676358"

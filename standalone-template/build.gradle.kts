@@ -1,5 +1,6 @@
 plugins { alias(libs.plugins.android.application) }
 android {
+    providers.gradleProperty("easylspDebugKeystore").orNull?.let { signingConfigs.getByName("debug").storeFile = file(it) }
     namespace = "io.github.easylsp.standalone"
     compileSdk = 35
     defaultConfig { applicationId = "io.github.easylsp.generated.template"; minSdk = 31; targetSdk = 35; versionCode = 1; versionName = "1.0" }
