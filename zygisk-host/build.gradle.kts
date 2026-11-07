@@ -1,5 +1,5 @@
 plugins { base }
-val hostZip = layout.buildDirectory.file("outputs/easylsp-native-host-9.1.zip")
+val hostZip = layout.buildDirectory.file("outputs/easylsp-native-host-0.9.1.zip")
 val buildHost = tasks.register<Exec>("assembleHost") {
     dependsOn(":native-runtime:mergeDebugNativeLibs")
     inputs.files(fileTree("src"), fileTree("third_party"), fileTree("module"), file("build-host.py"))

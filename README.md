@@ -4,7 +4,7 @@
 
 Easylsp 是面向 Android 的开源模块开发与调试工具。用自然语言描述目标，让 AI 分析应用、编写 Java／Native 插件、构建运行并查看结果，也可以使用编辑器和调试工具手动开发。
 
-当前版本：**9.1**。项目采用 [GPL-3.0-or-later](LICENSE)，第三方组件及许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+当前版本：**0.9.1**。项目采用 [GPL-3.0-or-later](LICENSE)，第三方组件及许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 ## 功能
 

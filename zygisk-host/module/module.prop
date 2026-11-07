@@ -1,6 +1,6 @@
 id=easylsp_native_host
 name=Easylsp Native Host (experimental)
-version=9.1
-versionCode=910
+version=0.9.1
+versionCode=911
 author=Easylsp
 description=M7 standard Zygisk API v4 and optional Next Native host. Android 12+, arm64. Device compatibility pending; install and reboot manually.

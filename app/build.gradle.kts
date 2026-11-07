@@ -15,8 +15,8 @@ android {
         applicationId = "io.github.easylsp"
         minSdk = 31
         targetSdk = 35
-        versionCode = 910
-        versionName = "9.1"
+        versionCode = 911
+        versionName = "0.9.1"
         ndk { abiFilters += "arm64-v8a" }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         javaCompileOptions { annotationProcessorOptions { arguments["room.schemaLocation"] = "$projectDir/schemas" } }
@@ -155,7 +155,7 @@ tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.con
 
 val hostAssets = tasks.register<Copy>("prepareNativeHostAssets") {
     dependsOn(":zygisk-host:assembleHost")
-    from(rootProject.file("zygisk-host/build/outputs/easylsp-native-host-9.1.zip"))
+    from(rootProject.file("zygisk-host/build/outputs/easylsp-native-host-0.9.1.zip"))
     rename { "easylsp-native-host.zip" }
     into(layout.buildDirectory.dir("generated/nativeHostAssets"))
 }
