@@ -61,6 +61,8 @@ python3 scripts/test-github-market.py
 
 正式签名使用 `-PeasylspReleaseSigning=/path/to/release.properties`，配置文件包含 `storeFile`、`storePassword`、`keyAlias` 和 `keyPassword`，由本地维护，不加入仓库。
 
+主分支 GitHub Actions 使用仓库 Secrets 中保存的固定签名生成 debug 和 release APK：`EASYLSP_DEBUG_KEYSTORE`、`EASYLSP_RELEASE_KEYSTORE`、`EASYLSP_RELEASE_PROPERTIES` 均为对应文件的 Base64 内容。PR 构建不读取这些签名。升级时选择与已安装版本相同的 debug／release 包；同一签名系列可覆盖安装并保留数据，两种签名不能互相覆盖。
+
 ## 插件、市场与示例
 
 - [Java 插件 API](app/src/main/assets/plugin-api.md)与[示例](examples/plugins/)

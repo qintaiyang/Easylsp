@@ -18,7 +18,34 @@ jobs:
           packages: platform-tools
       - run: sdkmanager 'platforms;android-35' 'platforms;android-36' 'build-tools;35.0.0' 'build-tools;36.0.0' 'ndk;28.2.13676358' 'cmake;3.22.1'
       - uses: gradle/actions/setup-gradle@v4
+      - name: Restore upgrade signing keys
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          DEBUG_KEYSTORE: ${{ secrets.EASYLSP_DEBUG_KEYSTORE }}
+          RELEASE_KEYSTORE: ${{ secrets.EASYLSP_RELEASE_KEYSTORE }}
+          RELEASE_PROPERTIES: ${{ secrets.EASYLSP_RELEASE_PROPERTIES }}
+        run: |
+          umask 077
+          mkdir -p "$HOME/.android" "$RUNNER_TEMP/easylsp-signing"
+          test -n "$DEBUG_KEYSTORE" && test -n "$RELEASE_KEYSTORE" && test -n "$RELEASE_PROPERTIES"
+          printf '%s' "$DEBUG_KEYSTORE" | base64 --decode > "$HOME/.android/debug.keystore"
+          printf '%s' "$RELEASE_KEYSTORE" | base64 --decode > "$RUNNER_TEMP/easylsp-signing/release.jks"
+          printf '%s' "$RELEASE_PROPERTIES" | base64 --decode > "$RUNNER_TEMP/easylsp-signing/release.properties"
+          printf '\nstoreFile=%s/easylsp-signing/release.jks\n' "$RUNNER_TEMP" >> "$RUNNER_TEMP/easylsp-signing/release.properties"
       - run: ./gradlew :app:assembleDebug :demo-target:assembleDebug :app:assembleDebugAndroidTest :zygisk-host:assembleHost :hook-runtime:testDebugUnitTest :demo-target:testDebugUnitTest :app:testDebugUnitTest --console=plain --max-workers=2 -Pkotlin.compiler.execution.strategy=in-process
+      - name: Build signed release APK
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: ./gradlew :app:assembleRelease -PeasylspReleaseSigning="$RUNNER_TEMP/easylsp-signing/release.properties" --console=plain --max-workers=2 -Pkotlin.compiler.execution.strategy=in-process
+      - name: Remove signing files
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          python3 - <<'PY'
+          import os
+          import shutil
+          from pathlib import Path
+          shutil.rmtree(Path(os.environ["RUNNER_TEMP"]) / "easylsp-signing", ignore_errors=True)
+          (Path.home() / ".android/debug.keystore").unlink(missing_ok=True)
+          PY
       - run: python3 scripts/verify-skill-migration.py
       - run: python3 scripts/test-host-protocol.py
       - run: python3 scripts/test-native-core.py
@@ -31,6 +58,7 @@ jobs:
           name: easylsp-debug
           path: |
             app/build/outputs/apk/debug/*.apk
+            app/build/outputs/apk/release/*.apk
             demo-target/build/outputs/apk/debug/*.apk
             standalone-template/build/outputs/apk/debug/*.apk
             app/build/outputs/apk/androidTest/debug/*.apk
