@@ -8,7 +8,7 @@ import { HarnessRuntime } from './runtime.mjs';
 import { repairLimitHistory } from './session-repair.mjs';
 
 // SDK processes own execution history. The host only persists admission and command receipts.
-export async function startHost({ token, directory, port = 0, concurrency = Math.max(1, Math.min(availableParallelism(), Math.floor(totalmem() / (768 * 1024 * 1024)))) }) {
+export async function startHost({ token, directory, port = 0, idleTimeoutMs = 60000, concurrency = Math.max(1, Math.min(availableParallelism(), Math.floor(totalmem() / (768 * 1024 * 1024)))) }) {
   const server = createServer(async (request, response) => {
     const url = new URL(request.url, 'http://127.0.0.1');
     if (!url.pathname.startsWith('/oauth/')) { response.writeHead(404).end(); return; }
@@ -17,7 +17,18 @@ export async function startHost({ token, directory, port = 0, concurrency = Math
   });
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 40 * 1024 * 1024 });
   const sessions = new Map(), opening = new Map();
-  let focused, closing = false, scheduling = false;
+  let focused, closing = false, scheduling = false, idleSince = Date.now(), activeRequests = 0, workLeaseUntil = 0;
+  let closePromise;
+  const hasWork = () => Date.now() < workLeaseUntil || opening.size || scheduling || activeRequests || [...sessions.values()].some(s =>
+    !s.exited && (!s.ready || s.slot || s.submitting || s.maintenance || s.queue.length || s.interactions.size || s.yielded || s.reacquire || s.status === 'running'));
+  const idleTimer = setInterval(() => {
+    if (closing) return;
+    if (hasWork()) { idleSince = Date.now(); return; }
+    if (Date.now() - idleSince >= idleTimeoutMs) {
+      void close(true);
+    }
+  }, Math.min(10000, idleTimeoutMs));
+  idleTimer.unref();
   const broadcast = frame => {
     const text = JSON.stringify(frame);
     for (const socket of sockets.clients) if (socket.readyState === WebSocket.OPEN) socket.send(text);
@@ -151,6 +162,7 @@ export async function startHost({ token, directory, port = 0, concurrency = Math
   async function dispatch(method, params) {
     if (method.startsWith('mcp/')) return extensions.dispatch(method, params);
     if (method === 'host/status') return state(params.sessionId);
+    if (method === 'host/work') { workLeaseUntil = params.active ? Date.now() + 30000 : 0; return {}; }
     if (method === 'host/sessions') return { sessions: await Promise.all([...sessions.keys()].map(id => state(id))) };
     if (method === 'host/configure') {
       if (!Number.isSafeInteger(params.concurrency) || params.concurrency < 1) throw new Error('Expected a positive concurrency');
@@ -243,22 +255,32 @@ export async function startHost({ token, directory, port = 0, concurrency = Math
   }
   sockets.on('connection', socket => socket.on('message', async raw => {
     let frame;
+    activeRequests++;
     try {
       frame = JSON.parse(raw.toString());
+      if (closing) throw new Error('Host is shutting down; reconnect before submitting new work');
+      if (!['host/status', 'host/sessions', 'session/state', 'session/history', 'session/context/read', 'host/work'].includes(frame.method)) idleSince = Date.now();
       const result = await dispatch(frame.method, frame.params ?? {});
       if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ id: frame.id, result }));
       if (frame.method === 'host/stop') await close();
     } catch (error) {
       if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ id: frame?.id ?? null, error: { message: error.message } }));
-    }
+    } finally { activeRequests--; }
   }));
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
-  async function close() {
+  function close(idle = false) {
+    return closePromise ??= shutdown(idle);
+  }
+  async function shutdown(idle) {
     closing = true;
+    clearInterval(idleTimer);
+    await Promise.all([...sessions.values()].map(s => s.saving));
     for (const s of sessions.values()) if (!s.exited) await s.runtime.control('session/cancel', { sessionId: s.id });
     await Promise.all([...sessions.values()].filter(s => !s.exited).map(async s => { if ((await state(s.id)).status === 'running') await s.runtime.rpc('session/wait', { sessionId: s.id }); await s.runtime.close(); }));
+    await Promise.all([...sessions.values()].map(s => s.saving));
     sessions.clear();
     await extensions.close();
+    if (idle) broadcast({ method: 'host.idle', params: { idleTimeoutMs } });
     for (const socket of sockets.clients) socket.terminate();
     sockets.close(); await new Promise(resolve => server.close(resolve));
   }

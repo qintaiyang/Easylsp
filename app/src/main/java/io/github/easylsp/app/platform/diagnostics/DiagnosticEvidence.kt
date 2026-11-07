@@ -87,9 +87,27 @@ object DiagnosticEvidence {
     fun conclusion(tombstones: JSONArray, exits: JSONArray): JSONObject {
         val evidence = (0 until tombstones.length()).map { tombstones.getJSONObject(it) } + (0 until exits.length()).map { exits.getJSONObject(it) }
         val kinds = evidence.map { it.getString("classification") }.distinct()
-        return JSONObject().put("classification", when { kinds.isEmpty() -> "UNKNOWN"; kinds.size == 1 -> kinds.single(); else -> "MULTIPLE" })
+        return JSONObject().put("classification", when { kinds.isEmpty() -> "NO_EXIT_EVIDENCE"; kinds.size == 1 -> kinds.single(); else -> "MULTIPLE" })
             .put("evidence", JSONArray(evidence.map { JSONObject().put("source", it.getString("source")).put("pid", it.getInt("pid")) }))
             .put("note", if (evidence.isEmpty()) "没有取得可归属本次启动的退出证据；断连不等于崩溃。" else "分类来自系统记录；信号、环境查询或相邻时间不构成检测 Hook 的证明。")
+    }
+
+    fun observation(processes: JSONArray, complete: Boolean): JSONObject {
+        val rows = (0 until processes.length()).map { processes.getJSONObject(it) }
+        rows.forEach { row -> row.put("observationState", when {
+            row.optBoolean("aliveAtEnd") -> "ALIVE_AT_END"
+            (row.optJSONArray("exitEvidence")?.length() ?: 0) > 0 -> "EXIT_OBSERVED"
+            else -> "OBSERVATION_INCOMPLETE"
+        }) }
+        return JSONObject().put("collectionComplete", complete).put("observedProcesses", rows.size)
+            .put("aliveAtEnd", rows.count { it.optBoolean("aliveAtEnd") })
+            .put("exitsObserved", rows.count { (it.optJSONArray("exitEvidence")?.length() ?: 0) > 0 })
+            .put("state", when {
+                !complete -> "OBSERVATION_INCOMPLETE"
+                rows.isEmpty() -> "NOT_OBSERVED"
+                rows.map { it.getString("observationState") }.distinct().size == 1 -> rows.first().getString("observationState")
+                else -> "MIXED"
+            })
     }
 
     fun markdown(report: JSONObject): String = buildString {
@@ -98,6 +116,17 @@ object DiagnosticEvidence {
         appendLine("\n## 退出原因\n")
         val conclusion = report.getJSONObject("conclusion")
         appendLine(conclusion.getString("classification")); appendLine(conclusion.getString("note"))
+        appendLine("\n## 进程观察\n")
+        report.optJSONObject("observation")?.let { appendLine(it.getString("state")) }
+        val processes = report.optJSONArray("processes") ?: JSONArray()
+        if (processes.length() == 0) appendLine("未观察到可读取身份的进程；不能据此判定未启动或崩溃。")
+        for (i in 0 until processes.length()) {
+            val process = processes.getJSONObject(i)
+            appendLine("- " + process.optString("processName") + " / PID " + process.optInt("pid") + " / startTicks " + process.optLong("startTicks") +
+                "；已观察；初始化证据 " + (process.optJSONArray("initializationEvidence")?.length() ?: 0) +
+                "；结束存活 " + process.opt("aliveAtEnd") + "；退出证据 " + (process.optJSONArray("exitEvidence")?.length() ?: 0))
+        }
+        appendLine("采集完整：" + report.optBoolean("collectionComplete") + "；无法读取 liveness 时保持未确认。")
         appendLine("\n## 崩溃位置\n")
         val tombstones = report.getJSONArray("tombstones")
         if (tombstones.length() == 0) appendLine("未取得本次目标的 tombstone，不能提供故障指令或调用栈。")

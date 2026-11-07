@@ -25,7 +25,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val messages = MutableSharedFlow<String>()
     data class InstalledApp(val packageName: String, val name: String, val version: String, val system: Boolean, val installedAt: Long = 0, val updatedAt: Long = 0)
     val installed = MutableStateFlow<List<InstalledApp>>(emptyList())
-    init { refreshApps() }
+    init {
+        viewModelScope.launch { graph.initializeManagement() }
+        viewModelScope.launch {
+            graph.framework.state.map { it.compatible }.distinctUntilChanged().filter { it }.collect {
+                val failures = withContext(Dispatchers.IO) { graph.javaDeployments.migrateEnabled() }
+                if (failures.isNotEmpty()) messages.emit("已启用插件的离线发布未完成：\n" + failures.joinToString("\n"))
+            }
+        }
+        refreshApps()
+    }
     fun action(block: suspend () -> String) {
         if (busy.value) return
         busy.value = true
@@ -76,7 +85,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             require(dependencies.all { it.id == plugin.id || it.desiredEnabled }) { "请先启用联合发行与依赖" }
         }
         graph.store.enable(plugin.id, enabled)
-        if (graph.bridge.sessions.value.values.none { it.uid / 100000 == project.userId && it.packageName == project.packageName && PluginProcesses.matches(plugin, project.packageName, it.processName) }) "配置已保存；目标连接后按启用状态加载"
+        if (graph.bridge.sessions.value.values.none { it.uid / 100000 == project.userId && it.packageName == project.packageName && PluginProcesses.matches(plugin, project.packageName, it.processName) }) "启用配置已发布；下次目标启动生效"
         else graph.bridge.command(project.packageName, if (enabled) "loadPlugin" else "unloadPlugin", plugin.id)
     }
     fun command(project: ProjectEntity, operation: String, plugin: PluginEntity? = null) = action { graph.bridge.command(project.packageName, operation, plugin?.id) }
@@ -108,10 +117,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         "目标已重启；已读取实际 native 事件"
     }
     fun start(project: ProjectEntity) = action {
+        if (graph.framework.state.value.active) withContext(Dispatchers.IO) { graph.framework.requestJavaDebug(requireNotNull(graph.targetApplications.info(project.packageName, project.userId).applicationInfo).uid, project.packageName) }
         val intent = graph.packageManager.getLaunchIntentForPackage(project.packageName) ?: error("目标没有启动 Activity")
         graph.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); "已启动目标"
     }
     fun reconnect(project: ProjectEntity) = action {
-        graph.sendBroadcast(Intent(Protocol.RECONNECT_ACTION).setPackage(project.packageName)); "已请求重新连接；未运行时请先启动目标"
+        graph.bridge.reconnect(project.packageName); "已请求重新连接；未运行时请先启动目标"
     }
 }

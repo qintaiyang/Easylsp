@@ -8,6 +8,27 @@ import io.github.easylsp.app.platform.nativeplugins.nativeHostProblem
 import io.github.easylsp.app.ui.components.*
 
 @Composable internal fun RuntimeEnvironmentCards(vm: MainViewModel) {
+    val preparation by vm.graph.harness.preparationId.collectAsStateWithLifecycle()
+    val preparationStatus by vm.graph.harness.status.collectAsStateWithLifecycle()
+    val executions by vm.graph.executions.store.records.collectAsStateWithLifecycle()
+    val execution = executions.firstOrNull { it.id == preparation }
+    var offset by remember(preparation) { mutableIntStateOf(0) }
+    var nextOffset by remember(preparation) { mutableStateOf<Int?>(null) }
+    var preparationLog by remember { mutableStateOf("") }
+    LaunchedEffect(preparation, execution, offset) {
+        val page = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { if (execution != null) vm.graph.harness.preparationPage(offset) else null }
+        preparationLog = page?.optString("text").orEmpty()
+        nextOffset = page?.takeUnless { it.isNull("nextOffset") }?.getInt("nextOffset")
+    }
+    AppCard {
+        Text("准备 AI 环境", style = MaterialTheme.typography.titleLarge)
+        Text(preparationStatus)
+        execution?.let { Text("任务 ${it.id} · ${it.state}") }
+        TextButton(onClick = { vm.action { vm.graph.harness.prepare(); "准备任务已启动；已完成阶段会复用" } }) { Text("准备 / 继续未完成步骤") }
+        if (preparationLog.isNotEmpty()) Text(preparationLog)
+        if (offset > 0) TextButton(onClick = { offset = 0 }) { Text("从头查看") }
+        nextOffset?.let { next -> TextButton(onClick = { offset = next }) { Text("后续日志") } }
+    }
     val framework by vm.graph.framework.state.collectAsStateWithLifecycle()
     val nativeHost by vm.graph.nativeHost.state.collectAsStateWithLifecycle()
     val root by vm.graph.root.state.collectAsStateWithLifecycle()

@@ -185,7 +185,8 @@
         "list_resources",
         "read_resource",
         "capture_sample",
-        "analysis_query"
+        "analysis_query",
+        "switch_conversation_sample"
       ]
     },
     {
@@ -197,6 +198,7 @@
       "tools": [
         "list_plugins",
         "read_plugin",
+        "validate_plugin",
         "create_plugin",
         "edit_plugin",
         "read_plugin_logs",
@@ -209,7 +211,10 @@
         "add_plugin_library",
         "remove_plugin_library",
         "read_plugin_files",
-        "write_plugin_file"
+        "write_plugin_file",
+        "publish_java_plugins",
+        "get_plugin_coverage",
+        "record_plugin_validation"
       ]
     },
     {
@@ -302,7 +307,11 @@
         "performanceStart",
         "performanceStop",
         "creationStacks",
-        "inspect_target"
+        "inspect_target",
+        "end_target_debug",
+        "debug_target_once",
+        "read_runtime_memory",
+        "java_hook_metrics"
       ]
     },
     {

@@ -1,6 +1,8 @@
 package io.github.easylsp.app.feature.chat
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -12,7 +14,7 @@ import androidx.compose.ui.unit.dp
 import io.github.easylsp.app.data.*
 
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable internal fun ConversationModels(conversation: ConversationEntity, providers: List<ProviderEntity>, busy: Boolean, dismiss: () -> Unit, select: (ProviderEntity) -> Unit, manage: () -> Unit) {
+@Composable internal fun ConversationModels(conversation: ConversationEntity, providers: List<ProviderEntity>, busy: Boolean, dismiss: () -> Unit, select: (ProviderEntity) -> Unit, manage: () -> Unit, effort: String = "", setEffort: (String) -> Unit = {}) {
     // Choice rows carry model IDs and their actual parent connection.
     val groups = providers.groupBy { it.connectionId }
     var selectedProvider by remember(groups.keys) { mutableStateOf(groups.keys.singleOrNull()) }
@@ -32,6 +34,13 @@ import io.github.easylsp.app.data.*
                         Column { Text(provider.modelDisplayName, style = MaterialTheme.typography.bodyMedium); Text(provider.model, style = MaterialTheme.typography.labelSmall) }
                     }
                 }
+            }
+            val current = providers.firstOrNull { it.id == conversation.modelConfigId.ifEmpty { conversation.providerId } }
+            val levels = current?.let { org.json.JSONObject(it.options).optJSONArray("reasoningEfforts") } ?: org.json.JSONArray()
+            Text("推理强度（下一轮生效）")
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                FilterChip(effort.isEmpty(), { setEffort("") }, label = { Text("自动") })
+                for (i in 0 until levels.length()) { val level = levels.getString(i); FilterChip(effort == level, { setEffort(level) }, label = { Text(level) }) }
             }
             TextButton(onClick = manage) { Text("管理供应商与模型") }
             Spacer(Modifier.height(16.dp))

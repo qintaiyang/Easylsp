@@ -1,10 +1,11 @@
 /* Called under the Android linker lock (dl_iterate_phdr or linker callbacks).
  * Registrations publish fully initialized slots with atomic counts. No Java or I/O. */
-struct module_identity { const ElfW(Phdr) *phdr; uintptr_t bias; uint64_t id; };
+struct module_identity { const ElfW(Phdr) *phdr; uintptr_t bias; uint64_t id; char build_id[129]; int build_ready; };
 static struct module_identity module_ids[128];
 static uint64_t next_module_id;
 static pthread_once_t hooks_once = PTHREAD_ONCE_INIT;
 static int hooks_result;
+static pthread_mutex_t hook_slots_lock = PTHREAD_MUTEX_INITIALIZER;
 struct diagnostic_owner { uintptr_t address; const char *name; };
 static struct diagnostic_owner diagnostic_owners[5];
 static unsigned diagnostic_count;
@@ -29,7 +30,8 @@ static int in_load(const struct dl_phdr_info *info, uintptr_t vaddr, size_t leng
     }
     return 0;
 }
-static void module_build_id(const struct dl_phdr_info *info, char out[129]) {
+static void parse_module_build_id(const struct dl_phdr_info *info, char out[129]) {
+    PROFILE_COUNT(build_reads);
     out[0] = 0;
     for (ElfW(Half) i = 0; i < info->dlpi_phnum; i++) {
         const ElfW(Phdr) *p = &info->dlpi_phdr[i];
@@ -51,10 +53,25 @@ static void module_build_id(const struct dl_phdr_info *info, char out[129]) {
 static uint64_t module_id(const struct dl_phdr_info *info) {
     for (unsigned i = 0; i < 128; i++) if (module_ids[i].phdr == info->dlpi_phdr && module_ids[i].bias == info->dlpi_addr) return module_ids[i].id;
     for (unsigned i = 0; i < 128; i++) if (!module_ids[i].phdr) {
-        module_ids[i] = (struct module_identity){info->dlpi_phdr, info->dlpi_addr, ++next_module_id}; return next_module_id;
+        module_ids[i] = (struct module_identity){.phdr=info->dlpi_phdr, .bias=info->dlpi_addr, .id=++next_module_id}; return next_module_id;
     }
     return 0;
 }
+static void module_build_id(const struct dl_phdr_info *info, char out[129]) {
+    uint64_t id = module_id(info);
+    for (unsigned i = 0; id && i < 128; i++) if (module_ids[i].id == id && module_ids[i].phdr) {
+        if (!module_ids[i].build_ready) { parse_module_build_id(info, module_ids[i].build_id); module_ids[i].build_ready = 1; }
+        strcpy(out, module_ids[i].build_id); return;
+    }
+    parse_module_build_id(info, out);
+}
+struct selector_cache_entry { struct selector selector; uint64_t epoch; unsigned count; };
+static struct selector_cache_entry selector_cache[64];
+static unsigned selector_cache_next;
+static uint64_t module_epoch = 1;
+struct symbol_cache_entry { uint64_t load_id; char symbol[256]; uintptr_t address; };
+static struct symbol_cache_entry symbol_cache[128];
+static unsigned symbol_cache_next;
 struct match_query { const struct selector *selector; unsigned count; };
 static int count_selected(struct dl_phdr_info *info, size_t size, void *data) {
     (void)size; struct match_query *q = data;
@@ -63,6 +80,23 @@ static int count_selected(struct dl_phdr_info *info, size_t size, void *data) {
         if (!q->selector->build_id[0] || !strcmp(q->selector->build_id, id)) q->count++;
     }
     return 0;
+}
+static unsigned selected_count(const struct selector *selector) {
+    for (unsigned i = 0; i < 64; i++) if (selector_cache[i].epoch == module_epoch &&
+        !strcmp(selector_cache[i].selector.name, selector->name) && !strcmp(selector_cache[i].selector.path, selector->path) && !strcmp(selector_cache[i].selector.build_id, selector->build_id)) return selector_cache[i].count;
+    PROFILE_COUNT(selector_scans);
+    struct match_query query = {selector, 0}; dl_iterate_phdr(count_selected, &query);
+    selector_cache[selector_cache_next++ % 64] = (struct selector_cache_entry){*selector, module_epoch, query.count};
+    return query.count;
+}
+static uintptr_t selected_symbol(uint64_t load_id, const char *path, const char *symbol) {
+    for (unsigned i = 0; i < 128; i++) if (symbol_cache[i].load_id == load_id && !strcmp(symbol_cache[i].symbol, symbol)) return symbol_cache[i].address;
+    PROFILE_COUNT(symbol_reads);
+    void *handle = shadowhook_dlopen(path); uintptr_t address = 0;
+    if (handle) { address = (uintptr_t)shadowhook_dlsym(handle, symbol); shadowhook_dlclose(handle); }
+    struct symbol_cache_entry *entry = &symbol_cache[symbol_cache_next++ % 128];
+    entry->load_id = load_id; strcpy(entry->symbol, symbol); entry->address = address;
+    return address;
 }
 static const char *address_owner(uintptr_t address, struct hook *self) {
     for (unsigned i = 0; i < instance_count; i++) for (unsigned j = 0; j < instances[i]->hook_count; j++) {
@@ -95,8 +129,6 @@ static void intercept_dispatch(shadowhook_cpu_context_t *cpu, void *user) {
 }
 #include "native_plt.inc"
 static int install_at(struct hook *h, uintptr_t address) {
-    const char *owner = address_owner(address, h);
-    if (owner) return SH_CONFLICT;
     h->address = address;
     if (h->mode == 2) h->stub = shadowhook_intercept_instr_addr((void *)address, intercept_dispatch, h,
         h->intercept_flags & SH_SIMD_READ_WRITE ? SHADOWHOOK_INTERCEPT_WITH_FPSIMD_READ_WRITE : SHADOWHOOK_INTERCEPT_DEFAULT);
@@ -122,8 +154,8 @@ static void bind_hook(struct hook *h, struct dl_phdr_info *info, uint32_t phase)
         event(h->owner, h->id, "hook_version_mismatch", SH_VERSION_MISMATCH, info->dlpi_name);
         return; /* A rejected candidate must not claim load_id: a later library can match. */
     }
-    struct match_query q = {&h->selector, 0}; dl_iterate_phdr(count_selected, &q);
-    if (!code && q.count > 1) code = SH_AMBIGUOUS;
+    unsigned matches = selected_count(&h->selector);
+    if (!code && matches > 1) code = SH_AMBIGUOUS;
     if (!code && phase == SH_MODULE_EXISTING && h->phase == SH_REQUIRE_BEFORE_CONSTRUCTORS) code = SH_MISSED_STAGE;
     h->load_id = module_id(info); h->load_bias = info->dlpi_addr;
     if (!h->load_id) code = SH_LIMIT;
@@ -133,8 +165,7 @@ static void bind_hook(struct hook *h, struct dl_phdr_info *info, uint32_t phase)
         address = h->address;
     } else if (!code && h->symbol[0]) {
         /* ShadowHook's ELF reader does not load a library or execute constructors. */
-        void *handle = shadowhook_dlopen(info->dlpi_name);
-        if (handle) { address = (uintptr_t)shadowhook_dlsym(handle, h->symbol); shadowhook_dlclose(handle); }
+        address = selected_symbol(h->load_id, info->dlpi_name, h->symbol);
         if (!address) code = SHADOWHOOK_ERRNO_HOOK_DLSYM;
     } else if (!code) {
         if ((h->vaddr & 3) || !in_load(info, h->vaddr, 4, PF_X)) code = SH_INVALID_ADDRESS;
@@ -156,15 +187,17 @@ static int register_hook(void *instance, const sh_module_selector_v1 *selector, 
                          uint32_t phase, void *replacement, void **original, sh_hook_id *id, uint32_t mode, sh_interceptor_v1 interceptor, void *user, uint32_t flags) {
     struct plugin *p = instance;
     if (!p->active || !p->registering || registration_owner != p || module_callback_depth || (mode != 2 && (!replacement || !original)) || !id || phase > SH_REQUIRE_BEFORE_CONSTRUCTORS || (symbol && (!*symbol || strlen(symbol) >= 256))) return SH_INVALID;
-    unsigned index = p->hook_count; if (index == MAX_HOOKS) return SH_LIMIT;
+    pthread_mutex_lock(&hook_slots_lock);
+    unsigned index = p->hook_count; if (index == MAX_HOOKS) { pthread_mutex_unlock(&hook_slots_lock); return SH_LIMIT; }
     struct hook *h = &p->hooks[index];
-    int code = selector_copy(&h->selector, selector); if (code) return code;
-    if (!symbol && !h->selector.build_id[0]) return SH_INVALID;
+    int code = selector_copy(&h->selector, selector); if (code) { pthread_mutex_unlock(&hook_slots_lock); return code; }
+    if (!symbol && !h->selector.build_id[0]) { pthread_mutex_unlock(&hook_slots_lock); return SH_INVALID; }
     h->mode = mode; h->interceptor = interceptor; h->interceptor_user = user; h->intercept_flags = flags;
     h->owner = p; h->id = index + 1; h->phase = phase; h->vaddr = vaddr; h->replacement = replacement; h->original = original;
     if (symbol) strcpy(h->symbol, symbol);
     *id = h->id; if (original) *original = NULL; atomic_store(&h->state, SH_WAITING);
     atomic_store(&p->hook_count, index + 1);
+    pthread_mutex_unlock(&hook_slots_lock);
     event(p, h->id, "hook_registered", SH_WAITING, symbol ? symbol : "ELF vaddr with required Build ID");
     struct hook_query q = {h}; dl_iterate_phdr(bind_existing, &q);
     code = atomic_load(&h->state);
@@ -215,6 +248,7 @@ static int subscribe_module(void *instance, const sh_module_selector_v1 *selecto
     struct subscription_query q = {p, s}; dl_iterate_phdr(notify_existing, &q); return 0;
 }
 static void process_module(struct dl_phdr_info *info, uint32_t phase) {
+    if (phase == SH_MODULE_BEFORE_CONSTRUCTORS || phase == SH_MODULE_BEFORE_UNLOAD) module_epoch++;
     for (unsigned i = 0; i < instance_count; i++) {
         struct plugin *p = instances[i]; if (!atomic_load(&p->active)) continue;
         if (phase == SH_MODULE_BEFORE_CONSTRUCTORS) for (unsigned j = 0; j < p->hook_count; j++) bind_hook(&p->hooks[j], info, phase);

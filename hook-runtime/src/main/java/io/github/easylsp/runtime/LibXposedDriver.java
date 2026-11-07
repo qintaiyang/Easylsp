@@ -9,8 +9,8 @@ public final class LibXposedDriver implements HookDriver {
     @Override public HookHandle install(Member member, Mode mode, HookCallback callback) {
         var handle = framework.hook((Executable) member).setExceptionMode(XposedInterface.ExceptionMode.PASSTHROUGH).intercept(chain -> {
             Object[] args = chain.getArgs().toArray();
-            HookParam param = new HookParam(member, chain.getThisObject(), args, null, null);
             if (mode != Mode.AFTER) {
+                HookParam param = new HookParam(member, chain.getThisObject(), args, null, null);
                 callback.call(param);
                 if (mode == Mode.REPLACE && !param.hasChangedOutcome()) throw new IllegalStateException("replace 回调必须设置结果或异常");
                 if (param.hasChangedOutcome()) return outcome(param);
@@ -18,7 +18,7 @@ public final class LibXposedDriver implements HookDriver {
             }
             Object result = null; Throwable failure = null;
             try { result = chain.proceed(args); } catch (Throwable error) { failure = error; }
-            param = new HookParam(member, chain.getThisObject(), args, result, failure);
+            HookParam param = new HookParam(member, chain.getThisObject(), args, result, failure);
             callback.call(param);
             return outcome(param);
         });

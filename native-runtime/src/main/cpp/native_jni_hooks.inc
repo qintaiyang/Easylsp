@@ -7,6 +7,7 @@ static jmethodID jni_class_name, jni_class_loader;
 static jint (*jni_original_register)(JNIEnv *, jclass, const JNINativeMethod *, jint);
 static jint (*jni_original_unregister)(JNIEnv *, jclass);
 static void *jni_register_stub, *jni_unregister_stub;
+static atomic_uint jni_request_count;
 static pthread_mutex_t jni_request_lock = PTHREAD_MUTEX_INITIALIZER;
 static JNIEnv *current_jni_env(void) {
     JNIEnv *env = NULL;
@@ -32,14 +33,12 @@ static int jni_find_module(struct dl_phdr_info *info, size_t size, void *user) {
 /* Replace the method table entry, not its shared code address. Two ClassLoaders
  * may register the same C function: inline-hooking that address would cross scope. */
 static jint jni_register_proxy(JNIEnv *env, jclass cls, const JNINativeMethod *methods, jint count) {
-    if (count <= 0 || !methods || (*env)->ExceptionCheck(env)) return jni_original_register(env, cls, methods, count);
+    if (!atomic_load(&jni_request_count) || count <= 0 || !methods || (*env)->ExceptionCheck(env)) return jni_original_register(env, cls, methods, count);
     jstring value = (*env)->CallObjectMethod(env, cls, jni_class_name);
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return jni_original_register(env, cls, methods, count); }
     const char *name = (*env)->GetStringUTFChars(env, value, NULL);
     if (!name) { (*env)->ExceptionClear(env); (*env)->DeleteLocalRef(env, value); return jni_original_register(env, cls, methods, count); }
-    JNINativeMethod *table = malloc((size_t)count * sizeof(*table));
-    if (!table) { (*env)->ReleaseStringUTFChars(env, value, name); (*env)->DeleteLocalRef(env, value); return jni_original_register(env, cls, methods, count); }
-    memcpy(table, methods, (size_t)count * sizeof(*table));
+    JNINativeMethod *table = NULL;
     pthread_mutex_lock(&jni_request_lock);
     struct hook *selected[MAX_INSTANCES * MAX_HOOKS];
     int changed[MAX_INSTANCES * MAX_HOOKS]; unsigned selected_count = 0;
@@ -49,12 +48,18 @@ static jint jni_register_proxy(JNIEnv *env, jclass cls, const JNINativeMethod *m
             struct plugin *p = instances[i]; if (!atomic_load(&p->active) || p->registering) continue;
             for (unsigned j = 0; j < p->hook_count; j++) {
                 struct hook *h = &p->hooks[j];
-                if (!h->jni_class_name[0] || strcmp(h->jni_name, methods[k].name) || strcmp(h->jni_signature, methods[k].signature) || !jni_matches(env, h, cls, name)) continue;
+                if (h->cancelled || !h->jni_class_name[0] || strcmp(h->jni_name, methods[k].name) || strcmp(h->jni_signature, methods[k].signature) || !jni_matches(env, h, cls, name)) continue;
                 if (chain_count && (h->mode == SH_EXCLUSIVE || chain[0]->mode == SH_EXCLUSIVE)) {
                     atomic_store(&h->state, SH_CONFLICT); event(p, h->id, "jni_hook_conflict", SH_CONFLICT, chain[0]->owner->plugin_id); continue;
                 }
                 chain[chain_count++] = h;
             }
+        }
+        if (!chain_count) continue;
+        if (!table) {
+            table = malloc((size_t)count * sizeof(*table));
+            if (!table) break;
+            memcpy(table, methods, (size_t)count * sizeof(*table));
         }
         void *next = methods[k].fnPtr;
         for (unsigned j = chain_count; j > 0; j--) {
@@ -70,7 +75,7 @@ static jint jni_register_proxy(JNIEnv *env, jclass cls, const JNINativeMethod *m
         }
         table[k].fnPtr = next;
     }
-    jint result = jni_original_register(env, cls, table, count);
+    jint result = jni_original_register(env, cls, table ? table : methods, count);
     /* No JNI calls here: preserve the VM's return value and pending exception. */
     for (unsigned i = 0; i < selected_count; i++) {
         struct hook *h = selected[i];
@@ -135,21 +140,23 @@ done:
 static int hook_jni_method(void *instance, const sh_jni_method_v1 *method, const sh_hook_options_v1 *options,
         void *replacement, void **original, sh_hook_id *id) {
     struct plugin *p = instance; JNIEnv *env = current_jni_env();
-    if (!p->active || !p->registering || registration_owner != p || runtime_registration || module_callback_depth || !env || !method || method->struct_size < sizeof(*method) || method->scope > SH_JNI_EXACT_LOADER ||
+    if (!p->active || (p->registering && registration_owner != p) || runtime_registration || module_callback_depth || !env || !method || method->struct_size < sizeof(*method) || method->scope > SH_JNI_EXACT_LOADER ||
         !method->class_name || !method->method_name || !method->signature || !replacement || !original || !id ||
         !options || options->struct_size < sizeof(*options) || options->mode > SH_CHAIN ||
         strlen(method->class_name) >= 256 || strlen(method->method_name) >= 128 || strlen(method->signature) >= 256 ||
         (method->scope == SH_JNI_EXACT_CLASS && !method->exact_class)) return SH_INVALID;
     pthread_mutex_lock(&jni_request_lock);
+    pthread_mutex_lock(&hook_slots_lock);
+    if (!p->active || (p->registering && registration_owner != p)) { pthread_mutex_unlock(&hook_slots_lock); pthread_mutex_unlock(&jni_request_lock); return SH_INVALID; }
     unsigned index = p->hook_count;
-    if (index == MAX_HOOKS) { pthread_mutex_unlock(&jni_request_lock); return SH_LIMIT; }
+    if (index == MAX_HOOKS) { pthread_mutex_unlock(&hook_slots_lock); pthread_mutex_unlock(&jni_request_lock); return SH_LIMIT; }
     struct hook *h = &p->hooks[index]; h->owner = p; h->id = index + 1; h->mode = options->mode;
     h->replacement = replacement; h->original = original; h->jni_scope = method->scope;
     h->jni_class = method->exact_class ? (*env)->NewGlobalRef(env, method->exact_class) : NULL;
-    if (method->exact_class && !h->jni_class) { pthread_mutex_unlock(&jni_request_lock); return SH_INVALID; }
+    if (method->exact_class && !h->jni_class) { pthread_mutex_unlock(&hook_slots_lock); pthread_mutex_unlock(&jni_request_lock); return SH_INVALID; }
     strcpy(h->jni_class_name, method->class_name); strcpy(h->jni_name, method->method_name); strcpy(h->jni_signature, method->signature);
     *id = h->id; *original = NULL; atomic_store(&h->state, SH_WAITING);
-    atomic_store(&p->hook_count, index + 1); pthread_mutex_unlock(&jni_request_lock);
+    atomic_store(&p->hook_count, index + 1); atomic_fetch_add(&jni_request_count, 1); pthread_mutex_unlock(&hook_slots_lock); pthread_mutex_unlock(&jni_request_lock);
     event(p, h->id, "jni_waiting_registration", SH_WAITING, method->class_name);
     return SH_WAITING;
 }

@@ -54,7 +54,6 @@ class ToolCatalog(private val graph: EasylspApp) {
     fun unavailableReason(tool: ToolDefinition, binding: RunBinding): String? = when {
         tool.groupId.startsWith("project.") && binding.projectBinding == null -> "需要真实项目绑定；请从设备应用或导入 APK 项目进入会话。独立聊天仍可使用文件、终端和明确 pluginId 的发行工具。"
         tool.groupId == "project.analysis" && binding.sampleRevision == 0L && tool.name !in setOf("capture_sample", "get_project_info") -> "需要先采集或导入 APK 样本。"
-        (tool.groupId == "project.inspection" || tool.name in setOf("load_plugin", "unload_plugin", "reload_plugin", "get_plugin_status", "plugin_action")) && binding.sessionId !in graph.bridge.sessions.value -> "需要本轮绑定的在线 Java 目标进程；请启用目标作用域、启动并连接目标后重新发送。Native 发布与会话文件/终端不需要 Java 会话。"
         else -> null
     }
     fun groupTools(): Map<String, List<String>> = groups.entries.groupBy({ it.value }, { it.key })
@@ -86,13 +85,11 @@ class ToolCatalog(private val graph: EasylspApp) {
         }
         fun session(): String {
             require(project.kind == "INSTALLED") { "导入 APK 项目不支持动态执行" }
-            val id = binding.sessionId ?: error("本轮未选择目标会话")
-            require(graph.bridge.sessions.value[id]?.packageName == project.packageName) { "目标会话 $id 已离线；请调用 list_target_sessions 查询在线目标后继续" }
-            return id
+            return graph.bridge.resolve(project, binding.sessionId).id
         }
         val paging = mapOf("offset" to "integer", "limit" to "integer")
         add("ask_user", "Ask the user a question. Provide options for single/multiple choice or omit options for text. Cancellation returns a cancelled result.", mapOf("question" to "string", "options" to "array", "multiple" to "boolean"), listOf("question")) { binding.askUser(it) }
-        add("get_project_info", "Read the explicitly bound project, immutable sample revision and target session") { JSONObject().put("projectId", project.id).put("packageName", project.packageName).put("kind", project.kind).put("sampleRevision", binding.sampleRevision).put("version", project.version).put("sessionId", binding.sessionId ?: JSONObject.NULL).put("processName", binding.sessionId?.let { graph.bridge.sessions.value[it]?.processName } ?: JSONObject.NULL) }
+        add("get_project_info", "Read conversation, bound/latest immutable samples, installed version and current target identities") { ProjectContext.read(graph, binding) }
         fun analysis(name: String, action: String, description: String, fields: Map<String, String>, required: List<String>) {
             add(name, description, fields + paging, required) { graph.analysis.call(project.id, binding.sampleRevision, action, it) }
         }
@@ -117,6 +114,14 @@ class ToolCatalog(private val graph: EasylspApp) {
             val item = graph.store.create(project, args.getString("name"), args.getString("source"), processName = process, runtime = args.optString("runtime", "BEANSHELL").uppercase(), nativeEntry = args.optString("nativeEntry", "src/main.c"))
             JSONObject().put("pluginId", item.id).put("revision", item.revision).put("runtime", item.runtime).put("entry", item.entry).put("enabled", false)
         }
+        add("validate_plugin", "Validate BeanShell syntax without executing, saving, publishing or connecting to a target. Supply exactly one of pluginId (saved source) or source (draft text). Returns valid, line/column and nearby source on errors. Does not validate runtime classes or behavior. Native plugins use build_native_plugin.", mapOf("pluginId" to "string", "source" to "string")) { args ->
+            require(args.has("pluginId") xor args.has("source")) { "必须且只能指定 pluginId 或 source" }
+            val item = if (args.has("pluginId")) plugin(args) else null
+            if (item != null) require(item.runtime == "BEANSHELL") { "Native 插件请使用 build_native_plugin" }
+            PluginSyntax.validate(if (item != null) graph.store.read(item.id) else args.getString("source")).apply {
+                if (item != null) { put("pluginId", item.id); put("revision", item.revision) }
+            }
+        }
         add("edit_plugin", "Save a new revision; does not change the running instance", mapOf("pluginId" to "string", "source" to "string"), listOf("pluginId", "source"), true,
             preview = { args -> val item = plugin(args); "${item.name} r${item.revision}\n--- 当前源码\n${graph.store.read(item.id)}\n+++ 待保存源码\n${args.getString("source")}" }) { args ->
             val item = plugin(args); graph.store.save(item.id, item.name, item.author, item.description, item.version, args.getString("source")); JSONObject().put("pluginId", item.id).put("revision", item.revision + 1)
@@ -128,13 +133,17 @@ class ToolCatalog(private val graph: EasylspApp) {
                 require(PluginProcesses.matches(item, project.packageName, host.processName)) { "插件绑定进程与本轮会话不匹配" }
                 if (name == "load_plugin" || name == "reload_plugin") graph.store.enable(item.id, true)
                 val result = graph.bridge.commandSession(id, operation, item.id)
-                JSONObject().put("message", result).put("sessionId", id).put("pluginId", item.id).put("state", graph.bridge.instances.value["$id/${item.id}"]?.state ?: "UNKNOWN").put("loadedRevision", graph.bridge.instances.value["$id/${item.id}"]?.revision ?: 0)
+                graph.bridge.identity(host).put("message", result).put("sessionId", id).put("pluginId", item.id).put("state", graph.bridge.instances.value["$id/${item.id}"]?.state ?: "UNKNOWN").put("loadedRevision", graph.bridge.instances.value["$id/${item.id}"]?.revision ?: 0)
             }
         }
         add("read_plugin_logs", "Read Java logs for the bound session and native events across independent process instances. instanceId filters native evidence. Use this for plugin log output instead of guessing target app file paths.", mapOf("pluginId" to "string", "query" to "string", "instanceId" to "string") + paging) { args ->
             val offset = args.optInt("offset", 0); val limit = args.optInt("limit", 50); require(offset >= 0 && limit in 1..200) { "offset 必须 >= 0；limit 必须在 1..200 范围内" }
             val pluginId = if (args.has("pluginId")) plugin(args).id else null
             val query = args.optString("query")
+            if (pluginId != null && graph.store.dao.plugin(pluginId)?.runtime == "BEANSHELL") {
+                val rows = graph.logs.range(offset, limit + 1) { it.optInt("uid") / 100000 == project.userId && it.optString("packageName") == project.packageName && (binding.sessionId == null || it.optString("sessionId") == binding.sessionId) && it.optString("pluginId") == pluginId && it.toString().contains(query, true) }
+                return@add JSONObject().put("items", JSONArray(rows.take(limit))).put("unit", "entries").put("nextOffset", if (rows.size > limit) offset + limit else JSONObject.NULL)
+            }
             val includeNative = pluginId == null || graph.store.dao.plugin(pluginId)?.runtime == "NATIVE"
             val nativeRows = if (includeNative) {
                 graph.nativeInstances.collect(project.id)
@@ -151,8 +160,8 @@ class ToolCatalog(private val graph: EasylspApp) {
                 JSONObject(graph.bridge.commandSession(session(), operation, arguments = bundle))
             }
         }
-        add("read_tool_output", "Read a long result using its outputId and character cursor; scoped to this conversation", mapOf("outputId" to "string") + paging, listOf("outputId")) { args ->
-            graph.toolOutputs.page(binding.conversationId, args.getString("outputId"), args.optInt("offset", 0), args.optInt("limit", 12000))
+        add("read_tool_output", "Read a long result using its outputId and character cursor; scoped to this conversation", mapOf("outputId" to "string", "field" to "string", "equals" to "object") + paging, listOf("outputId")) { args ->
+            if (args.has("field") || args.has("equals")) graph.toolOutputs.select(binding.conversationId, args.getString("outputId"), args.optString("field"), args.optJSONObject("equals")) else graph.toolOutputs.page(binding.conversationId, args.getString("outputId"), args.optInt("offset", 0), args.optInt("limit", 12000))
         }
         add("read_development_reference", "Read before writing hooks. document: plugin-api/example for Java; native-api/native-header/native-symbol-example/native-vaddr-example/native-lifecycle-example/native-jni-example/native-chain-example/native-register-example/native-intercept-example for C ABI and build; plugin-release for v3 local release preparation; paged by line", mapOf("document" to "string") + paging, listOf("document")) { args ->
             val path = when (args.getString("document")) { "plugin-api" -> "plugin-api.md"; "example" -> "replace-add/main.java"; "plugin-release" -> "plugin-release.md"; "native-api" -> "native-sdk/native-plugin-api.md"; "native-header" -> "native-sdk/easylsp_native_plugin.h"; "native-symbol-example" -> "early-symbol/src/main.c"; "native-vaddr-example" -> "elf-vaddr/src/main.c"; "native-lifecycle-example" -> "module-lifecycle/src/main.c"; "native-jni-example" -> "jni-onload/src/main.c"; "native-chain-example" -> "chain-a/src/main.c"; "native-register-example" -> "jni-register/src/main.c"; "native-intercept-example" -> "instruction-intercept/src/main.c"; else -> error("未知开发参考 document") }
@@ -168,7 +177,7 @@ class ToolCatalog(private val graph: EasylspApp) {
             graph.nativeDeployments.enable(plugin(args), args.getString("buildId"), args.getString("policy"))
         }
         add("disable_native_plugin", "Remove a native plugin from the next startup snapshot. Current processes retain their loaded code until exit; does not hot-unload or restart.", mapOf("pluginId" to "string"), listOf("pluginId"), true) { args -> graph.nativeDeployments.disable(plugin(args)) }
-        add("get_native_plugin_status", "Read source/build/publication and actual PID/startTicks/instance/hook evidence, independently of Java sessions. No evidence is not proof of non-execution; initialized is not proof of an application fix.", mapOf("pluginId" to "string"), listOf("pluginId")) { args -> graph.nativeInstances.status(plugin(args)) }
+        add("get_native_plugin_status", "Read saved/published versions and compact instance summaries. scope=current (default) matches observed UID/PID/startTicks independently of Java sessions; scope=history pages recorded instances. No evidence means unknown, not non-execution. Detailed events/sources are available through each evidenceRead reference.", mapOf("pluginId" to "string", "scope" to "string", "processName" to "string", "instanceId" to "string", "cursor" to "integer", "limit" to "integer"), listOf("pluginId")) { args -> graph.nativeInstances.status(plugin(args), args) }
         add("list_extensions", "List enabled remote MCP servers and tool plugins without connecting. Discover only an extension needed for the task.") {
             JSONObject().put("extensions", JSONArray(graph.mcp.available(binding.projectBinding?.id).map { JSONObject().put("id", it.id).put("name", it.name).put("kind", "MCP") } + graph.store.workflows.enabledToolPlugins().map { JSONObject().put("id", it.id).put("name", it.name).put("kind", "script") }))
         }
@@ -201,11 +210,11 @@ class ToolCatalog(private val graph: EasylspApp) {
         }
         add("run_command", "Run Android /system/bin/sh in the project workspace, including am/cmd/logcat and Android file paths. Python, apt-get and other Ubuntu tools belong in run_linux. Does not accept a pagination limit; page long output with read_execution. Check installed command options rather than assuming strace -k support. Returns an executionId; read_execution queries that same command without rerunning it. Uses granted su when root preference is enabled, otherwise app UID; shares a PTY with the visible terminal.", mapOf("command" to "string", "cwd" to "string", "timeoutSeconds" to "integer", "interactive" to "boolean", "waitSeconds" to "integer"), listOf("command"), true) { args ->
             val id = graph.executions.command(binding.workspace.id, args.getString("command"), args.optString("cwd", "."), args.optInt("timeoutSeconds", 120), args.optBoolean("interactive"))
-            if (args.has("waitSeconds")) graph.executions.waitFor(binding.workspace.id, id, args.getInt("waitSeconds")).put("executionId", id) else JSONObject().put("executionId", id)
+            graph.executions.waitFor(binding.workspace.id, id, args.optInt("waitSeconds", 1)).put("executionId", id)
         }
         add("read_execution", "Read paged terminal, Skill, subagent or Frida output in this project", mapOf("executionId" to "string", "waitSeconds" to "integer") + paging, listOf("executionId")) { args ->
             val id = args.getString("executionId")
-            if (args.has("waitSeconds")) graph.executions.waitFor(binding.workspace.id, id, args.getInt("waitSeconds"))
+            if (args.has("waitSeconds")) graph.executions.waitUntil(binding.workspace.id, id, args.getInt("waitSeconds"))
             graph.executions.store.page(binding.workspace.id, id, args.optInt("offset", 0), args.optInt("limit", 12000))
         }
         add("write_stdin", "Write stdin to an interactive execution", mapOf("executionId" to "string", "text" to "string", "close" to "boolean"), listOf("executionId", "text"), true) { args -> graph.executions.input(binding.workspace.id, args.getString("executionId"), args.getString("text"), args.optBoolean("close")); JSONObject().put("written", true) }

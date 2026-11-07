@@ -70,7 +70,15 @@ static _Atomic unsigned instance_count;
 static pthread_mutex_t events_lock = PTHREAD_MUTEX_INITIALIZER;
 static char events[EVENT_COUNT][EVENT_BYTES];
 static unsigned event_end, event_size;
+static uint64_t event_committed, event_positions[EVENT_COUNT];
 static _Atomic uint64_t sequence, dropped;
+#ifdef EASYLSP_CORE_PROFILE
+static uint64_t profile_format_ns, profile_log_ns, profile_events, profile_build_reads, profile_selector_scans, profile_symbol_reads;
+static uint64_t profile_clock(void) { struct timespec value; clock_gettime(CLOCK_MONOTONIC, &value); return (uint64_t)value.tv_sec * 1000000000 + value.tv_nsec; }
+#define PROFILE_COUNT(name) (++profile_##name)
+#else
+#define PROFILE_COUNT(name) ((void)0)
+#endif
 
 static void escape(char *out, size_t capacity, const char *in) {
     size_t n = 0;
@@ -83,6 +91,9 @@ static void escape(char *out, size_t capacity, const char *in) {
 }
 static void event(struct plugin *p, sh_hook_id hook, const char *phase, int code, const char *detail) {
     int saved_errno = errno;
+#ifdef EASYLSP_CORE_PROFILE
+    uint64_t profile_start = profile_clock();
+#endif
     char message[513], release[257], line[EVENT_BYTES];
     escape(release, sizeof(release), p->release_id);
     escape(message, sizeof(message), detail);
@@ -91,17 +102,24 @@ static void event(struct plugin *p, sh_hook_id hook, const char *phase, int code
     uint64_t timestamp = (uint64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
     snprintf(line, sizeof(line), "{\"schema\":1,\"uid\":%u,\"pid\":%u,\"startTicks\":%" PRIu64
         ",\"instanceId\":\"%s\",\"pluginId\":\"%s\",\"buildId\":\"%s\",\"generation\":\"%s\","
-        "\"backend\":\"%s\",\"coreVersion\":\"0.9-dev1-engine2.0.1-m7\",\"releaseId\":\"%s\",\"timestamp\":%" PRIu64 ",\"sourceRevision\":%" PRIu64 ",\"sequence\":%" PRIu64 ",\"dropped\":%" PRIu64
+        "\"backend\":\"%s\",\"coreVersion\":\"0.91-engine2.0.1-m7\",\"releaseId\":\"%s\",\"timestamp\":%" PRIu64 ",\"sourceRevision\":%" PRIu64 ",\"sequence\":%" PRIu64 ",\"dropped\":%" PRIu64
         ",\"hookId\":%u,\"phase\":\"%s\",\"code\":%d,\"detail\":\"%s\"}",
         p->context.uid, p->context.pid, p->context.start_ticks, p->instance_id, p->plugin_id, p->build_id,
         p->generation, core_backend ? core_backend : "UNCLAIMED", release, timestamp, p->context.source_revision, seq, atomic_load(&dropped), hook, phase, code, message);
     if (pthread_mutex_trylock(&events_lock) == 0) {
+        event_positions[event_end] = ++event_committed;
         memcpy(events[event_end], line, strlen(line) + 1);
         event_end = (event_end + 1) % EVENT_COUNT;
         if (event_size < EVENT_COUNT) event_size++; else atomic_fetch_add(&dropped, 1);
         pthread_mutex_unlock(&events_lock);
     } else atomic_fetch_add(&dropped, 1);
+#ifdef EASYLSP_CORE_PROFILE
+    uint64_t profile_log_start = profile_clock(); profile_format_ns += profile_log_start - profile_start;
+#endif
     __android_log_write(ANDROID_LOG_INFO, "EasylspNative", line);
+#ifdef EASYLSP_CORE_PROFILE
+    profile_log_ns += profile_clock() - profile_log_start; profile_events++;
+#endif
     errno = saved_errno;
 }
 static uint64_t start_ticks(void) {
@@ -211,17 +229,28 @@ int sh_core_load_plugin_fd(const sh_core_plugin_v1 *request) {
     pthread_mutex_unlock(&load_lock);
     return result;
 }
-void sh_core_read_events(sh_core_event_callback callback, void *user) {
-    /* Snapshot under the lock; user code runs after unlocking. */
-    char (*snapshot)[EVENT_BYTES] = malloc(sizeof(events));
-    if (!snapshot) return;
+void sh_core_read_events_since(uint64_t *cursor, sh_core_event_callback callback, void *user) {
+    /* Commit positions, unlike event sequence numbers, cannot arrive out of order. */
+    char snapshot[16][EVENT_BYTES];
     pthread_mutex_lock(&events_lock);
-    unsigned count = event_size;
-    for (unsigned i = 0; i < count; i++)
-        strcpy(snapshot[i], events[(event_end + EVENT_COUNT - count + i) % EVENT_COUNT]);
+    uint64_t end = event_committed;
     pthread_mutex_unlock(&events_lock);
-    for (unsigned i = 0; i < count; i++) callback(user, snapshot[i]);
-    free(snapshot);
+    while (*cursor < end) {
+        unsigned count = 0;
+        pthread_mutex_lock(&events_lock);
+        for (unsigned i = 0; i < event_size && count < 16; i++) {
+            unsigned slot = (event_end + EVENT_COUNT - event_size + i) % EVENT_COUNT;
+            if (event_positions[slot] > *cursor && event_positions[slot] <= end) {
+                strcpy(snapshot[count++], events[slot]); *cursor = event_positions[slot];
+            }
+        }
+        if (!count) *cursor = end;
+        pthread_mutex_unlock(&events_lock);
+        for (unsigned i = 0; i < count; i++) callback(user, snapshot[i]);
+    }
+}
+void sh_core_read_events(sh_core_event_callback callback, void *user) {
+    uint64_t cursor = 0; sh_core_read_events_since(&cursor, callback, user);
 }
 
 #include "native_event_server.inc"

@@ -61,7 +61,12 @@ public final class LibXposedEntry extends XposedModule {
             LibXposedDriver driver = new LibXposedDriver(this);
             if (info.isFirstPackage()) {
                 driver.install(Instrumentation.class.getDeclaredMethod("callApplicationOnCreate", Application.class), HookDriver.Mode.AFTER,
-                    p -> { diagnostic.event("application_onCreate_returned"); RuntimeBootstrap.start((Application) p.args[0], driver, diagnostic); });
+                    p -> { diagnostic.event("application_onCreate_returned"); Application app = (Application) p.args[0];
+                        String key = android.os.Process.myUid() + ":" + app.getPackageName();
+                        JavaStartupSnapshot snapshot = new JavaStartupSnapshot(getRemotePreferences("java-plugins").getString(key, null), this::openRemoteFile);
+                        snapshot.debugRequested = getRemotePreferences("java-debug").getLong(key, 0) > System.currentTimeMillis();
+                        RuntimeBootstrap.start(app, driver, diagnostic, snapshot); });
+
                 diagnostic.event("java_hook_installed");
             }
         } catch (Throwable error) { android.util.Log.e("Easylsp", "libxposed 初始化失败（API " + getApiVersion() + "）", error); }

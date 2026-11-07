@@ -10,6 +10,11 @@ public final class PluginHooks implements AutoCloseable {
     private final PluginLog log;
     private final List<HookHandle> handles = new ArrayList<>();
     private boolean closed;
+    private volatile boolean metricsEnabled;
+    private final java.util.concurrent.atomic.AtomicLong hits = new java.util.concurrent.atomic.AtomicLong(), failures = new java.util.concurrent.atomic.AtomicLong();
+    private long installed;
+    public void metrics(boolean enabled) { metricsEnabled = enabled; }
+    public synchronized String metrics() { return "{\"enabled\":" + metricsEnabled + ",\"installed\":" + installed + ",\"active\":" + handles.size() + ",\"hits\":" + hits.get() + ",\"exceptions\":" + failures.get() + ",\"functionalValidation\":\"NOT_REPORTED\"}"; }
     public PluginHooks(HookDriver driver, ClassLoader loader, PluginLog log) {
         this.driver = driver; this.loader = loader; this.log = log;
     }
@@ -29,14 +34,19 @@ public final class PluginHooks implements AutoCloseable {
         for (int i = 0; i < types.length; i++) types[i] = resolve(parameters[i]);
         Member member = name.equals("<init>") ? type.getDeclaredConstructor(types) : type.getDeclaredMethod(name, types);
         HookHandle delegate = driver.install(member, mode, param -> {
+            if (metricsEnabled) hits.incrementAndGet();
             try { callback.call(param); }
-            catch (Throwable error) { log.write("ERROR", "Hook 回调失败: " + member, error); throw error; }
+            catch (Throwable error) { if (metricsEnabled) failures.incrementAndGet(); log.write("ERROR", "Hook 回调失败: " + member, error); throw error; }
         });
         HookHandle handle = new HookHandle() {
             private boolean released;
-            public synchronized void unhook() { if (!released) { delegate.unhook(); released = true; } }
+            public void unhook() {
+                synchronized (PluginHooks.this) {
+                    if (!released) { delegate.unhook(); released = true; handles.remove(this); }
+                }
+            }
         };
-        handles.add(handle);
+        handles.add(handle); installed++;
         return handle;
     }
     private Class<?> resolve(String name) throws ClassNotFoundException {
@@ -50,7 +60,14 @@ public final class PluginHooks implements AutoCloseable {
     public synchronized int size() { return handles.size(); }
     @Override public synchronized void close() {
         closed = true;
-        for (int i = handles.size() - 1; i >= 0; i--) handles.get(i).unhook();
-        handles.clear();
+        RuntimeException failure = null;
+        for (int i = handles.size() - 1; i >= 0; i--) {
+            try { handles.get(i).unhook(); }
+            catch (Throwable error) {
+                if (failure == null) failure = new IllegalStateException("Hook 清理未完成");
+                failure.addSuppressed(error);
+            }
+        }
+        if (failure != null) throw failure;
     }
 }

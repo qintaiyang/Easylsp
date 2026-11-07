@@ -26,3 +26,11 @@ with tempfile.TemporaryDirectory() as directory:
     test = directory / 'plt-test'
     subprocess.run(['cc','-std=c17','-Wall','-Wextra','-Werror','-I'+str(repo/'native-runtime/tests/stubs'),str(repo/'native-runtime/tests/core_plt_test.c'),'-ldl','-pthread','-o',str(test)],check=True)
     subprocess.run([str(test),str(caller)],check=True)
+
+    for fixture in ["core_event_test", "core_jni_test"]:
+        test = directory / fixture
+        import os
+        java = Path(os.environ.get("JAVA_HOME", "/usr/lib/jvm/java-17-openjdk-amd64"))
+        includes = ["-I" + str(java / "include"), "-I" + str(java / "include/linux")] if fixture == "core_jni_test" else []
+        subprocess.run(["cc", "-std=c17", "-Wall", "-Wextra", "-Werror", "-I" + str(repo / "native-runtime/tests/stubs"), *includes, str(repo / ("native-runtime/tests/" + fixture + ".c")), "-ldl", "-pthread", "-o", str(test)], check=True)
+        subprocess.run([str(test)], check=True)

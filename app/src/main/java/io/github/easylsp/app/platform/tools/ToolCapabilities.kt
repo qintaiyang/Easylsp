@@ -44,12 +44,12 @@ class ToolCapabilities(
 
     fun definitions(): List<ToolDefinition> {
         val searchSchema = BuiltinToolSchemas.create("search_tools", mapOf("query" to "string", "cursor" to "integer", "limit" to "integer"), listOf("query"))
-        val selectSchema = BuiltinToolSchemas.create("select_tools", mapOf("names" to "array", "mode" to "string"), listOf("names"))
+        val selectSchema = BuiltinToolSchemas.create("select_tools", mapOf("names" to "array", "mode" to "string", "includeState" to "boolean"), listOf("names"))
         selectSchema.getJSONObject("properties").getJSONObject("names").put("items", JSONObject().put("type", "string"))
         selectSchema.getJSONObject("properties").getJSONObject("mode").put("enum", JSONArray(listOf("add", "remove", "replace")))
         return listOf(
             ToolDefinition("search_tools", "Search the actual tool registry by name, purpose, group or source. Continue with nextCursor; no Skill is required. Unavailable tools include the actual reason.", searchSchema, invoke = { search(it) }, groupId = "capabilities", defaultAvailable = true),
-            ToolDefinition("select_tools", "Select known tool names for the next step, without restarting the session. Default mode add; remove/replace affect only your explicit selection, not default tools or global settings. Call selected tools after their definitions appear in the next step.", selectSchema, invoke = { select(it) }, groupId = "capabilities", defaultAvailable = true)
+            ToolDefinition("select_tools", "Select known tools for the next step. Default mode add; remove/replace affect only explicit selections, not defaults or Skills. Returns only effective additions/removals and unavailable names. To inspect full state, pass names=[] and includeState=true. Call selected tools after their definitions appear next step.", selectSchema, invoke = { select(it) }, groupId = "capabilities", defaultAvailable = true)
         ) + if (loadSkill == null) emptyList() else listOf(
             ToolDefinition("activate_skill", "Read Skill guidance and add suggested tool groups for the next step. Missing tools do not prevent reading. Optional groups may be combined. Repeated use of the same revision does not append instructions again.", BuiltinToolSchemas.create("activate_skill", mapOf("skillId" to "string", "optionalGroups" to "array"), listOf("skillId")), invoke = { activate(it.getString("skillId"), it.optJSONArray("optionalGroups").strings()) }, groupId = "capabilities", defaultAvailable = true),
             ToolDefinition("release_skill", "Release this Skill's tool references. Explicitly selected or default tools remain available. User-pinned Skills must be released by the user.", BuiltinToolSchemas.create("release_skill", mapOf("skillId" to "string"), listOf("skillId")), invoke = { release(it.getString("skillId")) }, groupId = "capabilities", defaultAvailable = true)
@@ -79,15 +79,20 @@ class ToolCapabilities(
         require(mode in setOf("add", "remove", "replace")) { "mode 必须为 add、remove 或 replace" }
         val accepted = requested.filter { it in names && it !in unavailable }.toSet()
         val previous = selected.toSet()
+        val before = effective()
         when (mode) {
             "replace" -> { selected.clear(); selected.addAll(accepted) }
             "remove" -> selected.removeAll(requested)
             else -> selected.addAll(accepted)
         }
         if (selected != previous) { version++; save() }
-        return snapshot().put("effectiveFrom", "next_step").put("unavailableTools", JSONArray((requested - accepted).map {
+        val result = JSONObject().put("toolSetVersion", version).put("effectiveFrom", "next_step")
+            .put("added", JSONArray((effective() - before).sorted())).put("removed", JSONArray((before - effective()).sorted()))
+            .put("unavailableTools", JSONArray((requested - accepted).map {
             JSONObject().put("name", it).put("availability", availability(it))
         }))
+        if (args.optBoolean("includeState")) result.put("state", snapshot())
+        return result
     }
 
     /** Called once by SDK tool resolution; the entire tool batch uses this same admission. */

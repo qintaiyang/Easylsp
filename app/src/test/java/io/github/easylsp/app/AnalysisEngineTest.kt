@@ -56,10 +56,18 @@ class AnalysisEngineTest {
             val args = JSONObject().put("className", "fixture.First").put("signature", "Lfixture/First;->answer()I")
             val smali = engine.execute(sample, "smali", args) {}.getString("text")
             assertTrue(smali.contains("answer()I")); assertTrue(smali.contains("0x2a"))
-            val java = engine.execute(sample, "java", args) {}.getString("text")
+            val progress = mutableListOf<String>()
+            val java = engine.execute(sample, "java", args) { progress += it }.getString("text")
             assertTrue(java, java.contains("answer()")); assertTrue(java, java.contains("42"))
+            assertTrue(progress.any { it.startsWith("初始化 JADX") })
+            progress.clear()
+            val nextPage = engine.execute(sample, "java", JSONObject(args.toString()).put("offset", 1).put("limit", 2)) { progress += it }
+            assertEquals(java.lines().drop(1).take(2).joinToString("\n"), nextPage.getString("text"))
+            assertTrue("Paging must reuse extracted/decompiled text", progress.none { it.startsWith("初始化 JADX") || it.startsWith("还原") })
             val second = sample.copy(revision = 2, version = "2")
             assertEquals(2L, engine.execute(second, "methods", JSONObject()) {}.getLong("sampleRevision"))
+            engine.execute(second, "java", args) { progress += it }
+            assertTrue("New sample must not reuse the old cache", progress.any { it.startsWith("初始化 JADX") })
         } finally { engine.execute(sample, "clear", JSONObject()) {}; dir.deleteRecursively() }
         Unit
     }

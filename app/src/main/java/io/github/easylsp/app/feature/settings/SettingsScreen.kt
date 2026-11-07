@@ -61,7 +61,7 @@ import kotlinx.coroutines.withContext
                     TextButton(onClick = { vm.action { "已清理 ${vm.graph.store.clearUnusedReleaseCache()} 个未安装的缓存发行；回退时需要重新下载" } }) { Text("清理未安装的发行缓存") }
                     Text("Native 宿主与存储", style = MaterialTheme.typography.titleMedium)
                     Text("宿主安装／升级后重启手机；插件版本和配置发布只需重启目标。宿主独立数据保存在 /data/adb/easylsp。")
-                    TextButton(onClick = { exporter.launch("easylsp-native-host-0.9-dev1.zip") }) { Text("导出内置宿主安装 ZIP") }
+                    TextButton(onClick = { exporter.launch("easylsp-native-host-0.91.zip") }) { Text("导出内置宿主安装 ZIP") }
                     TextButton(onClick = { vm.action {
                         val intent = listOf("com.sukisu.ultra", "me.weishu.kernelsu", "com.topjohnwu.magisk", "me.bmax.apatch").firstNotNullOfOrNull { vm.graph.packageManager.getLaunchIntentForPackage(it) }
                         requireNotNull(intent) { "请打开当前 root 管理器，导入刚导出的 ZIP" }

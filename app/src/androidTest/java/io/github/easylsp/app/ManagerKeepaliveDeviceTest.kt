@@ -15,15 +15,16 @@ class ManagerKeepaliveDeviceTest {
     @Test fun applicationFlowControlsRealUidZeroKeeper() = runBlocking<Unit>(Dispatchers.IO) {
         val graph=InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as EasylspApp
         check(graph.root.useRoot())
-        val before=graph.managerKeepalive.state.value.enabled
+        val owner = UUID.randomUUID().toString()
         suspend fun root(script: String): String {
             val output=StringBuilder()
             val result=graph.executions.runner.execute(UUID.randomUUID().toString(),listOf(graph.root.su,"-c",script),graph.filesDir,closeInput=true,timeoutSeconds=30) { output.append(it) }
             check(result.exitCode==0) { output.toString() };return output.toString().trim()
         }
         try {
-            if (before) withTimeout(15000) { graph.managerKeepalive.state.first { it.running && it.managerPid == android.os.Process.myPid() } }
-            val active=graph.managerKeepalive.setEnabled(true)
+            assertFalse(graph.managerKeepalive.reconcile().running)
+            graph.managerKeepalive.taskActive(owner, true)
+            val active=graph.managerKeepalive.refresh()
             assertTrue(active.running);assertEquals(0,active.keeperUid);assertEquals(-1000,active.oomScoreAdj)
             assertEquals(android.os.Process.myPid(),active.managerPid);assertEquals("/",active.cgroup)
             assertNotEquals("error",active.binderStatus);assertNotEquals("error",active.hansStatus)
@@ -31,12 +32,14 @@ class ManagerKeepaliveDeviceTest {
             assertEquals("0",identity)
             val same=graph.managerKeepalive.reconcile()
             assertEquals(active.keeperPid,same.keeperPid)
-            val stopped=graph.managerKeepalive.setEnabled(false)
+            graph.managerKeepalive.taskActive(owner, false)
+            val stopped=graph.managerKeepalive.refresh()
             assertFalse(stopped.running)
             assertNotEquals("-1000",root("cat /proc/${android.os.Process.myPid()}/oom_score_adj"))
-            val restarted=graph.managerKeepalive.setEnabled(true)
+            graph.managerKeepalive.taskActive(owner, true)
+            val restarted=graph.managerKeepalive.refresh()
             assertTrue(restarted.running);assertNotEquals(active.keeperPid,restarted.keeperPid)
-            File(graph.filesDir,"manager-keepalive-evidence.json").writeText(JSONObject().put("status","PASSED").put("keeperUid",restarted.keeperUid).put("keeperPid",restarted.keeperPid).put("managerPid",restarted.managerPid).put("managerUid",android.os.Process.myUid()).put("oomScoreAdj",restarted.oomScoreAdj).put("binder",restarted.binderStatus).put("hans",restarted.hansStatus).put("automaticStartup",before).put("manufacturer",android.os.Build.MANUFACTURER).put("vendorSettings",io.github.easylsp.app.platform.root.ManufacturerBackgroundSettings.autostart(graph).toUri(android.content.Intent.URI_INTENT_SCHEME)).put("idempotentStart",true).put("disableRestoresOom",true).put("reEnable",true).toString(2))
-        } finally { graph.managerKeepalive.setEnabled(before) }
+            File(graph.filesDir,"manager-keepalive-evidence.json").writeText(JSONObject().put("status","PASSED").put("keeperUid",restarted.keeperUid).put("keeperPid",restarted.keeperPid).put("managerPid",restarted.managerPid).put("managerUid",android.os.Process.myUid()).put("oomScoreAdj",restarted.oomScoreAdj).put("binder",restarted.binderStatus).put("hans",restarted.hansStatus).put("automaticStartup",false).put("manufacturer",android.os.Build.MANUFACTURER).put("vendorSettings",io.github.easylsp.app.platform.root.ManufacturerBackgroundSettings.autostart(graph).toUri(android.content.Intent.URI_INTENT_SCHEME)).put("idempotentStart",true).put("disableRestoresOom",true).put("reEnable",true).toString(2))
+        } finally { graph.managerKeepalive.taskActive(owner, false) }
     }
 }

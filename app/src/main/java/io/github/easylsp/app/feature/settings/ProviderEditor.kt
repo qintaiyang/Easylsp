@@ -20,10 +20,11 @@ import java.util.UUID
     var name by remember(item.id) { mutableStateOf(item.name) }
     var protocol by remember(item.id) { mutableStateOf(item.protocol) }
     var url by remember(item.id) { mutableStateOf(item.baseUrl.ifBlank { ProviderPresets.all.first().url }) }
+    var presetName by remember(item.id) { mutableStateOf(ProviderPresets.all.firstOrNull { it.url == url }?.name ?: "自定义") }
     var enabled by remember(item.id) { mutableStateOf(item.enabled) }
     var key by remember(item.id) { mutableStateOf("") }
     var storedKey by remember { mutableStateOf("") }
-    var requestPath by remember(item.id) { mutableStateOf(initial.optString("requestPath", "/chat/completions")) }
+    var requestPath by remember(item.id) { mutableStateOf(initial.optString("requestPath", ProviderPresets.all.firstOrNull { it.url == url }?.requestPath ?: "/chat/completions")) }
     var modelsPath by remember(item.id) { mutableStateOf(initial.optString("modelsPath", "/models")) }
     var timeout by remember(item.id) { mutableStateOf(item.timeoutSeconds.toString()) }
     var configured by remember(item.id) { mutableStateOf<List<ProviderModelEntity>>(emptyList()) }
@@ -34,41 +35,53 @@ import java.util.UUID
     var editing by remember { mutableStateOf<String?>(null) }
     var status by remember { mutableStateOf("") }
     var fetching by remember { mutableStateOf(false) }
+    var advanced by remember { mutableStateOf(false) }
+    var authMode by remember { mutableStateOf(initial.optString("authMode", "key")) }
     val scope = rememberCoroutineScope()
     LaunchedEffect(item.id) {
         withContext(Dispatchers.IO) { graph.models.migrateConnections(); storedKey = graph.secrets.get(graph.models.credential(item)); configured = graph.store.workflows.models().filter { it.providerId == item.id } }
     }
     fun connection() = item.copy(name = name, protocol = protocol, baseUrl = url.trimEnd('/'), model = "", enabled = enabled,
-        timeoutSeconds = timeout.toInt(), options = JSONObject().put("requestPath", requestPath).put("modelsPath", modelsPath).toString())
+        timeoutSeconds = timeout.toInt(), options = JSONObject().put("authMode", authMode).put("requestPath", requestPath).put("modelsPath", modelsPath).toString())
     fun addModels(ids: Set<String>) {
         configured = configured + ids.filter { id -> configured.none { it.remoteModelId == id } }.map { id ->
-            val capacity = remote.firstOrNull { it.id == id }?.contextWindow ?: 0
-            ProviderModelEntity(UUID.randomUUID().toString(), item.id, id, id, options = JSONObject().apply { if (capacity > 0) { put("contextWindow", capacity); put("contextBudget", capacity) } }.toString())
+            val capabilities = remote.firstOrNull { it.id == id }?.capabilities ?: ModelCapabilities.resolve(id, url, JSONObject())
+            ProviderModelEntity(UUID.randomUUID().toString(), item.id, id, id, options = capabilities.toString())
         }
         selected = emptySet(); manual = ""
     }
     AlertDialog(onDismissRequest = close, title = { Text("供应商连接") }, text = {
         Column(Modifier.heightIn(max = 620.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.horizontalScroll(rememberScrollState())) { ProviderPresets.all.forEach { preset -> FilterChip(url == preset.url, {
-                name = preset.name; protocol = preset.protocol; url = preset.url; requestPath = preset.requestPath; modelsPath = preset.modelsPath; remote = emptyList()
+                presetName = preset.name; authMode = if (preset.name == "Ollama") "none" else "key"; name = preset.name; protocol = preset.protocol; url = preset.url; requestPath = preset.requestPath; modelsPath = preset.modelsPath; remote = emptyList()
             }, label = { Text(preset.name) }) } }
-            Field("连接名称", name) { name = it }; Field("API 基础地址", url) { url = it }
-            Row { listOf("openai", "anthropic", "gemini").forEach { p -> FilterChip(protocol == p, { protocol = p; requestPath = when (p) { "anthropic" -> "/messages"; "gemini" -> "/models/{model}:streamGenerateContent?alt=sse"; else -> "/chat/completions" } }, label = { Text(p) }) } }
-            OutlinedTextField(key, { key = it }, label = { Text(if (storedKey.isBlank()) "API Key" else "API Key（已保存，留空保留）") }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
-            Field("请求路径", requestPath) { requestPath = it }; Field("模型目录路径", modelsPath) { modelsPath = it }; Field("请求超时（秒）", timeout) { timeout = it }
+            if (advanced) Field("连接名称", name) { name = it }
+            if (advanced || presetName == "自定义") Field("API 基础地址", url) { url = it }
+            TextButton(onClick = { advanced = !advanced }) { Text(if (advanced) "收起高级设置" else "高级设置") }
+            if (advanced) Row { listOf("openai", "anthropic", "gemini").forEach { p -> FilterChip(protocol == p, { protocol = p; requestPath = when (p) { "anthropic" -> "/messages"; "gemini" -> "/models/{model}:streamGenerateContent?alt=sse"; else -> "/chat/completions" } }, label = { Text(p) }) } }
+            if (authMode != "none") OutlinedTextField(key, { key = it }, label = { Text(if (storedKey.isBlank()) "API Key" else "API Key（已保存，留空保留）") }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
+            if (advanced) {
+                Field("请求路径", requestPath) { requestPath = it }; Field("模型目录路径", modelsPath) { modelsPath = it }; Field("请求超时（秒）", timeout) { timeout = it }
+                ListItem(headlineContent = { Text("免密连接") }, trailingContent = { Switch(authMode == "none", { authMode = if (it) "none" else "key" }) })
+            }
             ListItem(headlineContent = { Text("启用连接") }, trailingContent = { Switch(enabled, { enabled = it }) })
             TextButton(enabled = !fetching, onClick = { scope.launch {
                 fetching = true
-                try { remote = ProviderModels().list(connection(), key.ifEmpty { storedKey }); status = "已获取 ${remote.size} 个模型" }
+                try {
+                    remote = ProviderModels().list(connection(), key.ifEmpty { storedKey })
+                    configured = configured.map { model -> model.copy(options = ModelCapabilities.resolve(model.remoteModelId, url,
+                        JSONObject(model.options), remote.firstOrNull { it.id == model.remoteModelId }?.capabilities ?: JSONObject()).toString()) }
+                    status = "已获取 ${remote.size} 个模型；已有模型补齐缺失能力，保留明确设置"
+                }
                 catch (e: CancellationException) { throw e } catch (e: Exception) { status = e.message.orEmpty() } finally { fetching = false }
-            } }) { Text("刷新远端目录") }
+            } }) { Text("获取模型与识别能力") }
             TextButton(enabled = !fetching && configured.isNotEmpty(), onClick = { scope.launch {
                 fetching = true
                 try {
                     val model = configured.first { it.enabled }
-                    val resolved = connection().copy(model = model.remoteModelId, options = JSONObject(model.options).put("requestPath", requestPath).put("modelsPath", modelsPath).toString(), maxSteps = model.maxSteps)
-                    val reply = ModelTransport().stream(resolved, key.ifEmpty { storedKey }, JSONArray().put(JSONObject().put("role", "user").put("content", "Reply OK.")), JSONArray()) {}
-                    status = "${model.remoteModelId}：${reply.text}"
+                    val resolved = connection().copy(model = model.remoteModelId, options = JSONObject(model.options).put("requestPath", requestPath).put("modelsPath", modelsPath).put("authMode", authMode).toString(), maxSteps = model.maxSteps)
+                    val reply = graph.harness.testModel(resolved, key.ifEmpty { storedKey })
+                    status = "环境已就绪；模型参数已解析；正式协议测试结果：\n" + reply
                 } catch (e: CancellationException) { throw e } catch (e: Exception) { status = e.message.orEmpty() } finally { fetching = false }
             } }) { Text("测试首个启用模型") }
             if (status.isNotEmpty()) Text(status)
@@ -95,6 +108,17 @@ import java.util.UUID
     }, confirmButton = { TextButton(onClick = { vm.action {
         val c = connection()
         withContext(Dispatchers.IO) {
+            val failures = configured.filter { it.enabled }.mapNotNull { model ->
+                try {
+                    val options = io.github.easylsp.app.platform.ai.ModelCapabilities.resolve(model.remoteModelId, c.baseUrl, JSONObject(model.options))
+                    JSONObject(c.options).let { connection -> connection.keys().forEach { options.put(it, connection.get(it)) } }
+                    io.github.easylsp.app.platform.harness.HarnessConfig.model(c.copy(model = model.remoteModelId, options = options.toString()), key.ifEmpty { storedKey }, "")
+                    null
+                }
+                catch (error: IllegalArgumentException) { model.remoteModelId + ": " + error.message }
+            }
+            require(failures.isEmpty()) { failures.joinToString("\n") }
+            require(authMode == "none" || key.isNotBlank() || storedKey.isNotBlank()) { "请填写 API Key" }
             val provider = graph.models.configureProvider(item.id.takeIf { graph.store.workflows.provider(it) != null }, JSONObject(c.options)
                 .put("name", c.name).put("protocol", c.protocol).put("baseUrl", c.baseUrl).put("enabled", c.enabled).put("timeoutSeconds", c.timeoutSeconds))
             if (key.isNotEmpty()) graph.secrets.put(graph.models.credential(provider), key)
@@ -114,6 +138,7 @@ import java.util.UUID
     var output by remember { mutableStateOf(initial.optString("maxOutputTokens")) }
     var summary by remember { mutableStateOf(initial.optString("summaryMaxTokens")) }
     var effort by remember { mutableStateOf(initial.optString("reasoningEffort")) }
+    var levels by remember { mutableStateOf(initial.optJSONArray("reasoningEfforts")?.let { array -> (0 until array.length()).joinToString(",") { array.getString(it) } }.orEmpty()) }
     var thinking by remember { mutableStateOf(initial.optString("thinkingBudget")) }
     var tokenField by remember { mutableStateOf(initial.optString("outputTokenField")) }
     var steps by remember { mutableStateOf(model.maxSteps.toString()) }
@@ -122,17 +147,26 @@ import java.util.UUID
     var error by remember { mutableStateOf("") }
     AlertDialog(onDismissRequest = close, title = { Text(model.remoteModelId) }, text = {
         Column(Modifier.heightIn(max = 500.dp).verticalScroll(rememberScrollState())) {
-            Field("显示名称", name) { name = it }; Field("实际上下文容量（待填写）", capacity) { capacity = it }; Field("上下文预算（留空使用容量）", contextBudget) { contextBudget = it }
+            Field("显示名称", name) { name = it }; Field("实际上下文容量", capacity) { capacity = it }; Field("上下文预算（留空最多 200000）", contextBudget) { contextBudget = it }
             Field("回答输出上限（留空按容量分配）", output) { output = it }; Field("压缩摘要上限（留空 16384）", summary) { summary = it }
             Field("每轮请求上限（0 不限）", steps) { steps = it }; Field("工具并发（留空按设备资源）", parallel) { parallel = it }
+            Text("能力来源：" + (initial.optJSONObject("capabilitySources")?.toString() ?: "未识别"))
+            Field("支持的推理档位（明确覆盖，逗号分隔）", levels) { levels = it }
             Field("reasoning_effort", effort) { effort = it }; Field("思考预算", thinking) { thinking = it }; Field("输出字段 max_tokens / max_completion_tokens", tokenField) { tokenField = it }
             ListItem(headlineContent = { Text("支持图片") }, trailingContent = { Switch(images, { images = it }) })
             if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error)
         }
     }, confirmButton = { TextButton(onClick = {
         try {
-            val options = JSONObject().put("supportsImages", images)
+            val options = JSONObject(initial.toString()).put("supportsImages", images)
+            listOf("contextWindow", "contextBudget", "maxOutputTokens", "summaryMaxTokens", "thinkingBudget", "maxParallelToolCalls", "reasoningEffort", "outputTokenField").forEach { options.remove(it) }
             mapOf("contextWindow" to capacity, "contextBudget" to contextBudget, "maxOutputTokens" to output, "summaryMaxTokens" to summary, "thinkingBudget" to thinking, "maxParallelToolCalls" to parallel).forEach { (key, text) -> if (text.isNotBlank()) options.put(key, text.toInt().also { require(it > 0) }) }
+            if (levels.isNotBlank()) options.put("reasoningEfforts", JSONArray(levels.split(',').map { it.trim() })) else options.remove("reasoningEfforts")
+            val sources = options.optJSONObject("capabilitySources") ?: JSONObject()
+            ModelCapabilities.fields.forEach { key -> if (options.opt(key)?.toString() != initial.opt(key)?.toString()) {
+                if (options.has(key)) sources.put(key, "user") else sources.remove(key)
+            } }
+            options.put("capabilitySources", sources).put("capabilitiesUpdatedAt", System.currentTimeMillis())
             if (effort.isNotBlank()) options.put("reasoningEffort", effort)
             if (tokenField.isNotBlank()) options.put("outputTokenField", tokenField)
             require(steps.toInt() >= 0)

@@ -45,7 +45,9 @@ internal fun toolSummary(run: ToolRunEntity?): String {
             val phases = (0 until instances.length()).map { when (instances.getJSONObject(it).optString("lifecycle")) {
                 "plugin_loading" -> "加载中"; "plugin_initialized" -> "已初始化"; "plugin_init_failed" -> "初始化失败"; "plugin_load_failed" -> "加载失败"; else -> "阶段未知"
             } }.distinct().joinToString("、")
-            if (instances.length() == 0) "尚无执行证据" else "${instances.length()} 个历史实例 · $phases · 当前存活未检查"
+            if (result.optString("scope") == "current") {
+                if (instances.length() == 0) "暂无当前实例证据 · 业务状态未知" else "${instances.length()} 个当前实例 · $phases · 功能待验证"
+            } else if (instances.length() == 0) "尚无历史执行证据" else "${instances.length()} 个历史实例 · $phases"
         }
         exit != null && exit != 0 -> "命令失败 · 退出码 $exit"
         state in listOf("ERROR", "TIMEOUT", "CANCELLED", "INTERRUPTED", "UNKNOWN") -> statusName(state)

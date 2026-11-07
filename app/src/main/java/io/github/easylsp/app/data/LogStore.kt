@@ -11,11 +11,15 @@ class LogStore(context: Context) {
     init { if (file.exists()) lines.value = file.bufferedReader().useLines { lines ->
         val tail = ArrayDeque<String>(); lines.forEach { line -> if (tail.size == 500) tail.removeFirst(); tail.addLast(line) }; tail.toList()
     } }
-    @Synchronized fun append(event: JSONObject) {
-        val line = event.toString()
-        file.appendText(line + "\n")
-        lines.value = (lines.value + line).takeLast(500)
+    @Synchronized fun append(event: JSONObject) = appendBatch(listOf(event))
+    @Synchronized fun appendBatch(events: List<JSONObject>) {
+        if (events.isEmpty()) return
+        val incoming = events.map { it.toString() }
+        file.appendText(incoming.joinToString("\n", postfix = "\n"))
+        lines.value = (lines.value + incoming).takeLast(500)
     }
+    @Synchronized fun range(offset: Int, limit: Int, filter: (JSONObject) -> Boolean): List<JSONObject> =
+        if (file.exists()) file.bufferedReader().useLines { rows -> rows.map(::JSONObject).filter(filter).drop(offset).take(limit).toList() } else emptyList()
     @Synchronized fun clear(filter: ((JSONObject) -> Boolean)? = null) {
         if (filter == null) { file.writeText(""); lines.value = emptyList(); return }
         val remaining = if (file.exists()) file.readLines().filterNot { filter(JSONObject(it)) } else emptyList()

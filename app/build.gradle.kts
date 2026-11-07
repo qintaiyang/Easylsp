@@ -14,8 +14,8 @@ android {
         applicationId = "io.github.easylsp"
         minSdk = 31
         targetSdk = 35
-        versionCode = 9
-        versionName = "0.9-dev1"
+        versionCode = 91
+        versionName = "0.91"
         ndk { abiFilters += "arm64-v8a" }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         javaCompileOptions { annotationProcessorOptions { arguments["room.schemaLocation"] = "$projectDir/schemas" } }
@@ -117,7 +117,7 @@ tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.con
 
 val harnessAssets = tasks.register<Copy>("prepareHarnessAssets") {
     from(rootProject.file("harness")) {
-        include("package.json", "package-lock.json", "runtime.mjs", "session-repair.mjs", "model-http.mjs", "model-profile.mjs", "control.mjs", "android-policy.mjs", "android-mcp.mjs", "bridge-control.mjs", "extensions.mjs", "host.mjs", "boot.mjs", "daemon.mjs")
+        include("package.json", "package-lock.json", "runtime.mjs", "probe.mjs", "session-repair.mjs", "model-http.mjs", "model-profile.mjs", "control.mjs", "android-policy.mjs", "android-mcp.mjs", "bridge-control.mjs", "extensions.mjs", "host.mjs", "boot.mjs", "daemon.mjs")
     }
     into(layout.buildDirectory.dir("generated/harnessAssets/harness"))
 }
@@ -154,7 +154,7 @@ tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.con
 
 val hostAssets = tasks.register<Copy>("prepareNativeHostAssets") {
     dependsOn(":zygisk-host:assembleHost")
-    from(rootProject.file("zygisk-host/build/outputs/easylsp-native-host-0.9-dev1.zip"))
+    from(rootProject.file("zygisk-host/build/outputs/easylsp-native-host-0.91.zip"))
     rename { "easylsp-native-host.zip" }
     into(layout.buildDirectory.dir("generated/nativeHostAssets"))
 }

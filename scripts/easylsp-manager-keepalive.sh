@@ -56,7 +56,8 @@ case "${1:-start}" in
         keeper_pid >/dev/null && exit 0
         rm -f "$state_dir/managers.json"
         nohup /system/bin/sh "$service" run </dev/null >"$state_dir/service.log" 2>&1 &
-        while [ ! -f "$state_dir/managers.json" ]; do sleep .1; done
+        child=$!
+        while [ ! -f "$state_dir/managers.json" ] && kill -0 "$child" 2>/dev/null; do sleep .1; done
         exit;;
     run) ;;
     *) exit 2;;
@@ -72,6 +73,11 @@ printf '%s' "$boot" > "$state_dir/boot"
 restore_processes
 echo $$ > "$state_dir/pid"
 while :; do
+    if [ ! -f "$state_dir/enabled" ] || [ -z "$(pidof io.github.easylsp)" ]; then
+        restore_processes
+        rm -f "$state_dir/pid" "$state_dir/managers.json" "$state_dir/enabled"
+        exit 0
+    fi
     managers='['; separator=
     for pid in $(pidof io.github.easylsp); do
         [ -r "/proc/$pid/stat" ] || continue

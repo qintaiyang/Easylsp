@@ -29,6 +29,11 @@ class HarnessServiceDeviceTest {
     @Test fun installedRuntimeSurvivesActivityRecreationAndClientReconnect() = runBlocking(Dispatchers.IO) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val screenOffSeconds = InstrumentationRegistry.getArguments().getString("screenOffSeconds", "20").toLong()
+        fun wakeScreen() {
+            for (command in listOf("input keyevent 224", "wm dismiss-keyguard")) instrumentation.uiAutomation.executeShellCommand(command).use {
+                android.os.ParcelFileDescriptor.AutoCloseInputStream(it).readBytes()
+            }
+        }
         val graph = instrumentation.targetContext.applicationContext as EasylspApp
         val activity = ActivityScenario.launch(MainActivity::class.java)
         val server = MockWebServer()
@@ -58,9 +63,19 @@ class HarnessServiceDeviceTest {
         val sessionId = "device-${UUID.randomUUID()}"
         val conversationId = "projection-$sessionId"
         val fixtureProvider = graph.models.configureProvider(null, JSONObject().put("name", "Harness service fixture").put("protocol", "openai").put("baseUrl", server.url("/v1").toString()))
-        val fixtureModel = graph.models.configureModel(null, fixtureProvider.id, "fixture", JSONObject())
+        val fixtureModel = graph.models.configureModel(null, fixtureProvider.id, "fixture", JSONObject().put("contextWindow", 32768).put("maxOutputTokens", 1024))
         try {
             if (!graph.harness.installed) graph.harness.install()
+            if (graph.harness.refresh().optString("status") != "stopped") {
+                graph.harness.connect().use { client ->
+                    val existing = client.request("host/sessions").getJSONArray("sessions")
+                    for (i in 0 until existing.length()) {
+                        val row = existing.getJSONObject(i)
+                        check(row.optString("status") !in setOf("running", "queued") && (row.optJSONArray("interactions")?.length() ?: 0) == 0) { "现有任务仍在执行，不能替换宿主" }
+                    }
+                }
+                graph.harness.stop()
+            }
             withContext(Dispatchers.Main) {
                 HarnessExecutionService.start(graph)
                 isBound = graph.bindService(Intent(graph, HarnessExecutionService::class.java), connection, Context.BIND_AUTO_CREATE)
@@ -125,21 +140,56 @@ class HarnessServiceDeviceTest {
             val gap = runCatching { projection.apply(conversationId, JSONObject().put("seq", cursor + 2)) }.exceptionOrNull()
             assertTrue(gap!!.message!!.contains("事件缺失"))
             assertEquals(cursor, graph.store.workflows.harnessSession(conversationId)!!.lastSeq)
-            if (screenOffSeconds > 0) instrumentation.uiAutomation.executeShellCommand("input keyevent 224").use { android.os.ParcelFileDescriptor.AutoCloseInputStream(it).readBytes() }
+            if (screenOffSeconds > 0) wakeScreen()
             activity.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
-            File(graph.filesDir, "phase3-harness-service-evidence.json").writeText(JSONObject().put("installedByApp", true).put("foregroundService", true)
+            val proof = JSONObject().put("installedByApp", true).put("foregroundService", true)
                 .put("activityRecreated", true).put("activityStoppedDuringTool", true).put("screenOffSeconds", screenOffSeconds).put("reconnected", true).put("duplicateInputsDispatched", 0).put("modelRequests", requests.get())
                 .put("projectionReplayedWithoutDuplicates", true).put("projectionMessages", projected.size).put("projectionCursor", cursor)
                 .put("serviceSocketReconnectedDuringToolAndStream", true).put("liveBeforeCommit", true).put("liveRestoredFromSnapshot", true)
-                .put("toolCalls", calls.get()).put("historyEvents", history.getJSONArray("events").length()).toString(2))
+                .put("toolCalls", calls.get()).put("historyEvents", history.getJSONArray("events").length())
+            val unknownInput = "unknown-$sessionId"
+            graph.store.workflows.insertInput(ChatInputEntity(unknownInput, conversationId, "Unconfirmed historical input", "[]", null, false, status = "UNKNOWN"))
+            val ended = withTimeoutOrNull(100000) { service.ended.await(); true } ?: false
+            assertTrue("Idle shutdown: ${graph.harness.serviceStatus.value}; disconnected=${service.disconnected}; runningExecutions=" +
+                graph.executions.store.records.value.filter { it.state == "RUNNING" }.map { it.id }, ended)
+            assertFalse(graph.managerKeepalive.refresh().running)
+            assertEquals("stopped", graph.harness.refresh().getString("status"))
+            assertEquals("UNKNOWN", graph.store.workflows.input(unknownInput)!!.status)
+            graph.harness.start()
+            val restoredTool = graph.tools.builtins(RunBinding(project, project.sampleRevision, null, conversationId)).first { it.name == "get_project_info" }
+            io.github.easylsp.app.platform.harness.HarnessToolBridge(listOf(restoredTool)).use { bridge ->
+                graph.harness.connect().use { client ->
+                    client.request("session/open", JSONObject().put("sessionId", sessionId).put("resume", true).put("config", config
+                        .put("bridgeURL", bridge.url).put("bridgeToken", bridge.token)))
+                    val restored = client.request("session/history", params().put("after", -1).put("limit", 200))
+                    val restoredEvents = restored.getJSONArray("events")
+                    assertEquals(events.length() + 1, restoredEvents.length())
+                    assertEquals("session/end-seed", restoredEvents.getJSONObject(events.length()).getString("type"))
+                    for (index in 0 until events.length()) {
+                        val original = events.getJSONObject(index)
+                        val resumed = restoredEvents.getJSONObject(index)
+                        assertEquals(original.getLong("seq"), resumed.getLong("seq"))
+                        assertEquals(original.getString("type"), resumed.getString("type"))
+                        if (original.getString("type") in setOf("tool/result", "assistant/message")) {
+                            assertEquals(original.getJSONObject("data").toString(), resumed.getJSONObject("data").toString())
+                        }
+                    }
+                    assertEquals(2, requests.get()); assertEquals(1, calls.get())
+                }
+            }
+            File(graph.filesDir, "phase3-harness-service-evidence.json").writeText(proof.put("idleShutdown", true)
+                .put("keeperStopped", true).put("historyResumedWithoutReplay", true).put("unknownReceiptPreservedWithoutWorkLease", true).toString(2))
         } finally {
             release.countDown()
+            if (screenOffSeconds > 0) wakeScreen()
             graph.harness.stop()
             withContext(Dispatchers.Main) { if (isBound) graph.unbindService(connection); graph.stopService(Intent(graph, HarnessExecutionService::class.java)) }
             graph.store.workflows.conversation(conversationId)?.let { row -> graph.store.transaction {
                 graph.store.workflows.deleteMessages(conversationId); graph.store.workflows.deleteTurns(conversationId); graph.store.workflows.deleteToolRuns(conversationId)
+                graph.store.workflows.deleteInputs(conversationId)
                 graph.store.workflows.deleteConversation(requireNotNull(row.projectId), conversationId)
             } }
+            graph.store.workflows.saveModel(fixtureModel.copy(enabled = false))
             graph.models.configureProvider(fixtureProvider.id, JSONObject().put("enabled", false))
             server.shutdown(); activity.close()
         }

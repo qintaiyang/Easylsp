@@ -20,6 +20,7 @@ int sh_engine_initialize(void);
 int sh_core_set_jni_env(void *environment);
 int sh_core_claim(const char *backend);
 int sh_core_load_plugin_fd(const sh_core_plugin_v1 *request);
+void sh_core_read_events_since(uint64_t *cursor, sh_core_event_callback callback, void *user);
 void sh_core_read_events(sh_core_event_callback callback, void *user);
 int sh_core_start_event_server(void);
 int sh_core_start_observation(const char *endpoint);

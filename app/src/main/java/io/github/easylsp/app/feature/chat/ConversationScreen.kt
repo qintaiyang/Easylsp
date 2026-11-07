@@ -203,13 +203,16 @@ import io.noties.markwon.Markwon
     fun reconnect() { scope.launch {
         try { graph.chat.observe(conversationId).await(); vm.error.value = "" } catch (error: Exception) { vm.error.value = error.message.orEmpty() }
     } }
+    var reasoningEffort by remember(conversation.id, conversation.modelConfigId) { mutableStateOf(graph.models.reasoning(conversation.id)) }
     if (choosingModel) ConversationModels(conversation, providers, active != null || accepting || queued.any { it.status != "QUEUED" }, { choosingModel = false }, { provider ->
         scope.launch { try {
             val imageAttachment = attachments.any { it.optString("type") == "image_url" }
             require(!imageAttachment || JSONObject(provider.options).optBoolean("supportsImages")) { "草稿含有图片，请选择声明支持图片的模型" }
             graph.chat.selectModel(conversationId, provider.id).await(); choosingModel = false; vm.error.value = ""
         } catch (failure: Exception) { vm.error.value = failure.message.orEmpty() } }
-    }, { choosingModel = false; managingModel = true })
+    }, { choosingModel = false; managingModel = true }, effort = reasoningEffort, setEffort = { effort ->
+        scope.launch(Dispatchers.IO) { graph.models.setReasoning(conversation, effort); reasoningEffort = effort }
+    })
     if (managingModel) io.github.easylsp.app.feature.settings.ProviderEditor(viewModel(), connectionProvider ?: ProviderEntity(java.util.UUID.randomUUID().toString(), "OpenAI", "openai", "", "")) { managingModel = false }
     Column(Modifier.fillMaxSize().testTag("conversation-$conversationId")) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {

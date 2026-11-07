@@ -31,6 +31,26 @@ public final class DemoActivity extends Activity {
         Button worker = new Button(this); worker.setText("子进程调用 add(2,3)"); worker.setOnClickListener(v -> startService(new Intent(this, DemoProcessService.class))); layout.addView(worker);
         Button dynamic = new Button(this); dynamic.setText("创建新 View（堆栈采集）"); dynamic.setOnClickListener(v -> { TextView text = new TextView(this); text.setText("New View " + System.currentTimeMillis()); layout.addView(text); }); layout.addView(dynamic);
         setContentView(layout);
+        if (getIntent().getBooleanExtra("verifyInspector", false)) {
+            Button dialog = new Button(this); dialog.setText("INSPECTOR_OPEN_DIALOG");
+            dialog.setOnClickListener(v -> new android.app.AlertDialog.Builder(this).setTitle("Inspector fixture")
+                .setMessage("Separate Dialog window").setPositiveButton("INSPECTOR_DIALOG_OK", (d, which) -> result.setText("INSPECTOR_DIALOG_CLICKED")).show());
+            layout.addView(dialog);
+            Button popup = new Button(this); popup.setText("INSPECTOR_OPEN_POPUP");
+            popup.setOnClickListener(v -> {
+                Button close = new Button(this); close.setText("INSPECTOR_POPUP_OK");
+                PopupWindow window = new PopupWindow(close, 700, 180, true);
+                close.setOnClickListener(button -> { result.setText("INSPECTOR_POPUP_CLICKED"); window.dismiss(); });
+                window.showAtLocation(layout, android.view.Gravity.CENTER, 0, 0);
+            });
+            layout.addView(popup);
+            ScrollView scroll = new ScrollView(this); scroll.setContentDescription("INSPECTOR_SCROLL");
+            LinearLayout rows = new LinearLayout(this); rows.setOrientation(LinearLayout.VERTICAL);
+            for (int i = 0; i < 40; i++) {
+                TextView row = new TextView(this); row.setText("INSPECTOR_ROW_" + i); row.setHeight(90); rows.addView(row);
+            }
+            scroll.addView(rows); layout.addView(scroll, new LinearLayout.LayoutParams(-1, 400));
+        }
         if (getIntent().getBooleanExtra("verifySpecialProcesses", false)) {
             for (Class<?> service : new Class<?>[] {NativeIsolatedService.class, NativeAppZygoteService.class}) {
                 ServiceConnection connection = new ServiceConnection() {

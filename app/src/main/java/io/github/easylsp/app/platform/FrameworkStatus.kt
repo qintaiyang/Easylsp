@@ -97,4 +97,15 @@ class FrameworkStatus {
         check(preferences.edit().putString(key, snapshot.toString()).commit()) { "native 快照提交失败" }
         check(org.json.JSONObject(requireNotNull(nativeSnapshot(key))).getString("generation") == snapshot.getString("generation")) { "框架当前 generation 与发布不一致" }
     }
+    fun requestJavaDebug(uid: Int, packageName: String) {
+        check(requireNotNull(service) { "框架服务未连接" }.getRemotePreferences("java-debug").edit()
+            .putLong(uid.toString() + ":" + packageName, System.currentTimeMillis() + 30000).commit()) { "调试连接请求发布失败" }
+    }
+    fun publishJavaSnapshot(key: String, snapshot: org.json.JSONObject) {
+        val preferences = requireNotNull(service) { "框架服务未连接" }.getRemotePreferences("java-plugins")
+        check(preferences.edit().putString(key, snapshot.toString()).commit()) { "Java 快照提交失败" }
+    }
+    fun javaSnapshot(key: String): String? = requireNotNull(service) { "框架服务未连接" }
+        .getRemotePreferences("java-plugins").getString(key, null)
+
 }

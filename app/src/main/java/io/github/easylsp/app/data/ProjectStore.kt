@@ -8,7 +8,7 @@ import java.io.*
 import java.util.*
 import java.util.zip.*
 
-class ProjectStore(private val context: Context, databaseName: String = "easylsp.db", private val root: File = File(context.filesDir, "plugins")) {
+class ProjectStore(private val context: Context, databaseName: String = "easylsp.db", private val root: File = File(context.filesDir, "plugins"), private val publishJava: (String, List<PluginEntity>) -> Unit = { _, _ -> }) {
     private val database = Room.databaseBuilder(context, EasylspDatabase::class.java, databaseName).addMigrations(EasylspDatabase.MIGRATION_1_2, EasylspDatabase.MIGRATION_2_3, EasylspDatabase.MIGRATION_3_4, EasylspDatabase.MIGRATION_4_5, EasylspDatabase.MIGRATION_5_6, EasylspDatabase.MIGRATION_6_7, EasylspDatabase.MIGRATION_7_8, EasylspDatabase.MIGRATION_8_9, EasylspDatabase.MIGRATION_9_10, EasylspDatabase.MIGRATION_10_11, EasylspDatabase.MIGRATION_11_12, EasylspDatabase.MIGRATION_12_13, EasylspDatabase.MIGRATION_13_14, EasylspDatabase.MIGRATION_14_15, EasylspDatabase.MIGRATION_15_16, EasylspDatabase.MIGRATION_16_17).build()
     val nativePlugins = database.nativePlugins()
     val diagnostics = database.diagnostics()
@@ -55,7 +55,9 @@ class ProjectStore(private val context: Context, databaseName: String = "easylsp
         require(!enabled || requireNotNull(dao.project(plugin.projectId)).userId == android.os.Process.myUid() / 100000) { "Java组件须在目标用户的管理器中启用" }
         if (enabled) require(ReleaseDependencies.installedOrder(plugin, installed).all { it.id == id || it.desiredEnabled }) { "请启用固定发行与依赖" }
         else ReleaseDependencies.requireCanDisable(plugin, installed)
-        dao.updatePlugin(plugin.copy(desiredEnabled = enabled))
+        val next = plugin.copy(desiredEnabled = enabled)
+        publishJava(plugin.projectId, installed.map { if (it.id == id) next else it }.filter { it.desiredEnabled })
+        dao.updatePlugin(next)
     }
     suspend fun deleteRelease(id: String) = withContext(Dispatchers.IO) {
         val plugin = requireNotNull(dao.plugin(id))
@@ -106,6 +108,7 @@ class ProjectStore(private val context: Context, databaseName: String = "easylsp
         require(plugin.runtime != "NATIVE" || !plugin.desiredEnabled) { "请先撤销 native 发布再删除" }
         require(ReleaseDependencies.components(plugin, dao.plugins(plugin.projectId)).size == 1) { "联合发行请整组停用并删除" }
         ReleaseDependencies.requireCanDisable(plugin, dao.plugins(plugin.projectId))
+        if (plugin.runtime == "BEANSHELL" && plugin.desiredEnabled) publishJava(plugin.projectId, dao.plugins(plugin.projectId).filter { it.desiredEnabled && it.id != id })
         dao.deletePlugin(id); File(root, id).deleteRecursively(); Unit
     }
     suspend fun read(id: String) = withContext(Dispatchers.IO) { sourceFile(requireNotNull(dao.plugin(id))).readText() }

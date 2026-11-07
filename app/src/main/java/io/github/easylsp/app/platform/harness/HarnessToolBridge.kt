@@ -80,7 +80,10 @@ class HarnessToolBridge(@Volatile private var tools: List<ToolDefinition>, port:
             if (result != null) response.put("result", result)
         } catch (e: Exception) {
             Logger.getLogger("HarnessTools").log(Level.WARNING, "MCP $method id=$id failed", e)
-            response.put("result", JSONObject().put("isError", true).put("content", JSONArray().put(JSONObject().put("type", "text").put("text", e.message ?: e.javaClass.simpleName))))
+            val failure = JSONObject().put("isError", true).put("content", JSONArray().put(JSONObject().put("type", "text").put("text", e.message ?: e.javaClass.simpleName)))
+            if (e is io.github.easylsp.api.internal.OperationException) failure.put("structuredContent", JSONObject()
+                .put("error", JSONObject().put("code", e.code).put("message", e.message)))
+            response.put("result", failure)
         }
         respond("200 OK", response.toString())
     }

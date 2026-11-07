@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import { modelProfile } from './model-profile.mjs';
+const base = { api: 'openai-responses', model: 'fixture', baseURL: 'http://localhost', contextWindow: 1050000, contextBudget: 200000, reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'] };
+const selected = modelProfile({ ...base, reasoningEffort: 'max' });
+assert.equal(selected.effort, 'max');
+assert.equal(selected.profile.models[0].reasoningEfforts.high, 'high');
+assert.equal(selected.profile.models[0].contextWindow, 200000);
+assert.equal(modelProfile(base).effort, undefined);
+const disabled = modelProfile({ ...base, reasoningEffort: 'none', reasoningEfforts: ['none', 'high'] });
+assert.equal(disabled.effort, 'off'); assert.equal(disabled.profile.models[0].reasoningEfforts.off, 'none');
+assert.throws(() => modelProfile({ ...base, reasoningEffort: 'unsupported' }));
+console.log('model profile capabilities and wire mapping passed');

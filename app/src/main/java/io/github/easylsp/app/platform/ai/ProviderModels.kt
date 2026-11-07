@@ -10,7 +10,7 @@ import java.util.concurrent.TimeUnit
 data class ProviderPreset(val name: String, val protocol: String, val url: String, val requestPath: String, val modelsPath: String = "/models")
 object ProviderPresets {
     val all = listOf(
-        ProviderPreset("OpenAI", "openai", "https://api.openai.com/v1", "/chat/completions"),
+        ProviderPreset("OpenAI", "openai", "https://api.openai.com/v1", "/responses"),
         ProviderPreset("Anthropic", "anthropic", "https://api.anthropic.com/v1", "/messages"),
         ProviderPreset("DeepSeek", "openai", "https://api.deepseek.com/v1", "/chat/completions"),
         ProviderPreset("OpenRouter", "openai", "https://openrouter.ai/api/v1", "/chat/completions"),
@@ -21,7 +21,7 @@ object ProviderPresets {
         ProviderPreset("自定义", "openai", "", "/chat/completions")
     )
 }
-data class RemoteModel(val id: String, val name: String, val contextWindow: Int = 0)
+data class RemoteModel(val id: String, val name: String, val contextWindow: Int = 0, val capabilities: JSONObject = JSONObject())
 class ProviderModels {
     private val client = OkHttpClient.Builder().retryOnConnectionFailure(false).callTimeout(30, TimeUnit.SECONDS).build()
     suspend fun list(provider: ProviderEntity, secret: String): List<RemoteModel> {
@@ -33,7 +33,7 @@ class ProviderModels {
                 next?.let { addQueryParameter(if (provider.protocol == "gemini") "pageToken" else "after_id", it) }
             }.build()
             val request = Request.Builder().url(url).apply {
-                when (provider.protocol) {
+                if (options.optString("authMode") != "none") when (provider.protocol) {
                     "anthropic" -> { header("anthropic-version", "2023-06-01"); header("x-api-key", secret) }
                     "gemini" -> header("x-goog-api-key", secret)
                     else -> if (secret.isNotEmpty()) header("Authorization", "Bearer $secret")
@@ -45,7 +45,8 @@ class ProviderModels {
                 val model = array.getJSONObject(i)
                 if (provider.protocol != "gemini" || model.optJSONArray("supportedGenerationMethods")?.toString()?.contains("generateContent") == true) {
                     val id = if (provider.protocol == "gemini") model.getString("name").removePrefix("models/") else model.getString("id")
-                    rows += RemoteModel(id, model.optString("displayName", model.optString("name", id)), model.optInt("context_length", model.optInt("inputTokenLimit", model.optJSONObject("top_provider")?.optInt("context_length") ?: 0)))
+                    val capabilities = ModelCapabilities.resolve(id, provider.baseUrl, JSONObject(), ModelCapabilities.metadata(model))
+                    rows += RemoteModel(id, model.optString("displayName", model.optString("name", id)), capabilities.optInt("contextWindow"), capabilities)
                 }
             }
             next = if (provider.protocol == "gemini") data.optString("nextPageToken").takeIf { it.isNotBlank() } else if (data.optBoolean("has_more")) data.getString("last_id") else null

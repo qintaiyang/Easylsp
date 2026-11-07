@@ -141,6 +141,10 @@ class NativeDeploymentPublisher(private val graph: EasylspApp) {
         require((0 until pluginItems.length()).all { pluginItems.getJSONObject(it).optString("processType", "app") == "app" || projectSettings.nativeBackend == "ZYGISK" && snapshot.getString("policy") == "NATIVE_ONLY" }) { "特殊进程使用Zygisk Native-only发布" }
         val row = NativeDeploymentEntity(snapshot.getString("generation"), projectId, snapshot.getInt("uid"), snapshot.getString("packageName"),
             snapshot.getLong("targetVersionCode"), snapshot.getString("policy"), snapshot.toString(), "PUBLISHED")
+        snapshot.optJSONArray("javaPlugins")?.let { ids ->
+            val selected = (0 until ids.length()).map { ids.getString(it) }.toSet()
+            if (graph.framework.state.value.active) graph.javaDeployments.publish(projectId, graph.store.dao.plugins(projectId).filter { it.id in selected })
+        }
         var step = "WRITE_ARTIFACT"
         try {
             if (snapshot.getString("backend") == "ZYGISK") {
@@ -276,6 +280,10 @@ class NativeDeploymentPublisher(private val graph: EasylspApp) {
             .put("plugins", JSONArray().put(JSONObject().put("pluginId", record.getString("pluginId"))
                 .put("buildId", buildId).put("sourceRevision", record.getLong("sourceRevision"))
                 .put("remoteFile", remote).put("processScope", "main").put("processName", project.packageName).put("config", "{}")))
+        snapshot.optJSONArray("javaPlugins")?.let { ids ->
+            val selected = (0 until ids.length()).map { ids.getString(it) }.toSet()
+            if (graph.framework.state.value.active) graph.javaDeployments.publish(projectId, graph.store.dao.plugins(projectId).filter { it.id in selected })
+        }
         var step = "WRITE_ARTIFACT"
         try {
             graph.framework.writeNativeArtifact(remote, File(directory, "plugin.so"))

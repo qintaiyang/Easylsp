@@ -14,13 +14,22 @@ import java.util.concurrent.ConcurrentHashMap
 
 class BridgeHub(private val context: Context, private val store: ProjectStore, private val logs: LogStore) {
     data class Instance(val revision: Long, val instanceId: String, val state: String, val error: String)
-    data class Session(val id: String, val packageName: String, val processName: String, val pid: Int, val uid: Int, val callback: IHostCallback, val death: IBinder.DeathRecipient)
+    data class Session(val id: String, val packageName: String, val processName: String, val pid: Int, val uid: Int, val callback: IHostCallback, val death: IBinder.DeathRecipient, val startTicks: Long? = null)
     private data class Pending(val sessionId: String, val result: CompletableDeferred<String>)
     val sessions = MutableStateFlow<Map<String, Session>>(emptyMap())
     val instances = MutableStateFlow<Map<String, Instance>>(emptyMap())
     private val pending = ConcurrentHashMap<String, Pending>()
     private val eventThread = HandlerThread("Easylsp-events").apply { start() }
     private val events = Handler(eventThread.looper)
+    private val logBatch = mutableListOf<JSONObject>()
+    private val flushLogs = Runnable { logs.appendBatch(logBatch.toList()); logBatch.clear() }
+    fun reconnect(packageName: String) {
+        val extras = Bundle().apply {
+            putBinder(Protocol.BRIDGE_BINDER, binder)
+            putInt(Protocol.MANAGER_UID, android.os.Process.myUid())
+        }
+        context.sendBroadcast(android.content.Intent(Protocol.RECONNECT_ACTION).setPackage(packageName).putExtras(extras))
+    }
     private fun ownSession(id: String): Session {
         val session = sessions.value[id] ?: throw SecurityException("会话已结束")
         if (session.uid != Binder.getCallingUid()) throw SecurityException("会话不属于当前 UID")
@@ -94,12 +103,14 @@ class BridgeHub(private val context: Context, private val store: ProjectStore, p
     }
     private fun receive(session: Session, event: Bundle) {
         when (event.getString("type")) {
+            "debug_disconnected" -> disconnect(session.id)
             "native" -> {
                 val graph = context.applicationContext as io.github.easylsp.app.EasylspApp
-                try { graph.nativeInstances.receive(session, event.getString("nativeEvent", "")) }
+                try { graph.nativeInstances.receiveBatch(session, event.getStringArray("nativeEvents")?.toList() ?: listOf(event.getString("nativeEvent", ""))) }
                 catch (error: IllegalArgumentException) { android.util.Log.w("Easylsp", "拒绝 native 事件", error) }
                 catch (error: org.json.JSONException) { android.util.Log.w("Easylsp", "拒绝无效 native JSON", error) }
             }
+            "identity" -> sessions.update { it + (session.id to session.copy(startTicks = event.getLong("startTicks"))) }
             "diagnostic" -> diagnosticEvent(session, "session_connected", event.getString("diagnosticRunId"))
             "result" -> {
                 val id = event.getString("requestId") ?: return
@@ -107,7 +118,7 @@ class BridgeHub(private val context: Context, private val store: ProjectStore, p
                 if (call.sessionId != session.id) return
                 pending.remove(id)
                 if (event.getBoolean("success")) call.result.complete(event.getString("message", "已完成"))
-                else call.result.completeExceptionally(IllegalStateException(event.getString("message", "请求失败")))
+                else call.result.completeExceptionally(io.github.easylsp.api.internal.OperationException(event.getString("errorCode", "RUNTIME_ERROR"), event.getString("message", "请求失败")))
             }
             "state" -> {
                 val id = event.getString("pluginId") ?: return
@@ -118,10 +129,22 @@ class BridgeHub(private val context: Context, private val store: ProjectStore, p
         }
     }
     private fun appendLog(session: Session, event: Bundle, level: String, message: String) {
-        logs.append(JSONObject().put("timestamp", event.getLong("timestamp", System.currentTimeMillis())).put("packageName", session.packageName)
+        if (logBatch.isEmpty()) events.postDelayed(flushLogs, 20)
+        logBatch.add(JSONObject().put("timestamp", event.getLong("timestamp", System.currentTimeMillis())).put("packageName", session.packageName)
             .put("uid", session.uid).put("processName", session.processName).put("pid", session.pid).put("sessionId", session.id)
             .put("pluginId", event.getString("pluginId", "")).put("revision", event.getLong("revision"))
             .put("instanceId", event.getString("instanceId", "")).put("level", level).put("message", message.take(16000)))
+    }
+    fun identity(session: Session) = JSONObject().put("sessionId", session.id).put("packageName", session.packageName)
+        .put("processName", session.processName).put("uid", session.uid).put("pid", session.pid).put("startTicks", session.startTicks ?: JSONObject.NULL)
+    fun candidates(project: ProjectEntity, processName: String = "") = sessions.value.values.filter {
+        it.packageName == project.packageName && it.uid / 100000 == project.userId && (processName.isEmpty() || it.processName == processName)
+    }
+    fun resolve(project: ProjectEntity, id: String?, processName: String = ""): Session {
+        val candidates = candidates(project, processName)
+        if (!id.isNullOrEmpty()) return candidates.firstOrNull { it.id == id }
+            ?: error("目标会话已离线或不属于当前项目；请显式选择新目标。candidates=" + org.json.JSONArray(candidates.map(::identity)))
+        return candidates.singleOrNull() ?: error("目标不唯一或未在线；candidates=" + org.json.JSONArray(candidates.map(::identity)))
     }
     fun session(packageName: String, processName: String = packageName, userId: Int = android.os.Process.myUid() / 100000) = sessions.value.values.singleOrNull { it.uid / 100000 == userId && it.packageName == packageName && it.processName == processName }
     suspend fun command(packageName: String, operation: String, pluginId: String? = null): String {

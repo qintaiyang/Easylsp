@@ -50,7 +50,7 @@ class ToolCapabilitiesTest {
         } while (cursor >= 0)
         assertEquals(12, found.size)
         val selection = capabilities.select(select("new_tool_11", "disabled", "outside_mode", "missing"))
-        assertTrue("new_tool_11" in names(selection))
+        assertTrue("new_tool_11" in names(selection, "added"))
         assertEquals(3, selection.getJSONArray("unavailableTools").length())
         val disabled = capabilities.search(JSONObject().put("query", "disabled")).getJSONArray("tools").getJSONObject(0)
         assertEquals("用户已停用", disabled.getJSONObject("availability").getString("reason"))
@@ -67,5 +67,25 @@ class ToolCapabilitiesTest {
         assertFalse(after.permits("a")); assertFalse(after.permits("b"))
         assertEquals(setOf("search_tools", "select_tools"), names(after.snapshot()))
         assertEquals(4, after.snapshot().getJSONArray("selections").length())
+    }
+
+    @Test fun selectionReturnsOnlyChangesAndFullStateIsExplicit() {
+        val capabilities = ToolCapabilities((0..200).map { tool("tool_$it", it < 150) })
+        capabilities.resolve()
+        val result = capabilities.select(select("tool_151", "tool_152", "tool_153", "tool_154"))
+        assertEquals(4, result.getJSONArray("added").length())
+        assertTrue(result.toString().length < 500)
+        assertFalse(result.has("activeTools")); assertFalse(result.has("selections"))
+        assertFalse(capabilities.permits("tool_151"))
+        val same = capabilities.select(select("tool_151"))
+        assertEquals(0, same.getJSONArray("added").length())
+        assertEquals(result.getLong("toolSetVersion"), same.getLong("toolSetVersion"))
+        capabilities.resolve()
+        assertTrue(capabilities.permits("tool_151"))
+        val removed = capabilities.select(select("tool_151", "tool_1", mode = "remove"))
+        assertEquals(setOf("tool_151"), names(removed, "removed"))
+        val state = capabilities.select(select().put("includeState", true)).getJSONObject("state")
+        assertTrue("tool_1" in names(state))
+        assertFalse("tool_151" in names(state))
     }
 }

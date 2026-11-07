@@ -14,6 +14,7 @@ class ReleaseActivationService(private val graph: EasylspApp) {
         require(project.userId == android.os.Process.myUid()/100000 || ordered.none { it.runtime=="BEANSHELL" }) { "跨用户Java组件需要该用户的管理器与框架" }
         if (ordered.any { it.runtime=="NATIVE" }) graph.nativeDeployments.enableReleaseSet(plugin.projectId,ordered)
         else {
+            graph.javaDeployments.publish(plugin.projectId, graph.store.dao.plugins(plugin.projectId).filter { it.desiredEnabled } + ordered)
             graph.store.transaction { ordered.forEach { graph.store.dao.updatePlugin(it.copy(desiredEnabled=true)) } }
             JSONObject().put("status","ENABLED_PENDING_RESTART")
         }
@@ -24,7 +25,10 @@ class ReleaseActivationService(private val graph: EasylspApp) {
         ReleaseDependencies.requireCanDisableSet(rows,installed)
         val project=requireNotNull(graph.store.dao.project(plugin.projectId))
         if (project.kind == "INSTALLED" && rows.any { it.runtime=="NATIVE" }) graph.nativeDeployments.disableReleaseSet(plugin)
-        else graph.store.transaction { rows.forEach { graph.store.dao.updatePlugin(it.copy(desiredEnabled=false)) } }
+        else {
+            if (project.kind == "INSTALLED") graph.javaDeployments.publish(plugin.projectId, installed.filter { it.desiredEnabled && rows.none { row -> row.id == it.id } })
+            graph.store.transaction { rows.forEach { graph.store.dao.updatePlugin(it.copy(desiredEnabled=false)) } }
+        }
         for (row in rows.filter { it.runtime=="BEANSHELL" }) {
             val sessions=graph.bridge.sessions.value.values.filter { it.uid/100000==project.userId && it.packageName==project.packageName && PluginProcesses.matches(row,project.packageName,it.processName) }
             sessions.forEach { graph.bridge.commandSession(it.id,"unloadPlugin",row.id) }

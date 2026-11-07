@@ -286,6 +286,29 @@ class DiagnosticCoordinator(private val graph: EasylspApp) {
                 val item = JSONObject(line)
                 if (item.optString("phase") == "session_connected" || item.optString("phase") == "session_registered") report.getJSONArray("sessions").put(item)
             } }
+            val observed = report.getJSONArray("processes")
+            val initialization = mutableListOf<JSONObject>()
+            if (eventFile.exists()) eventFile.useLines { lines -> lines.forEach { line ->
+                val item = JSONObject(line)
+                if (item.optString("phase") in setOf("module_loaded", "java_hook_installed", "session_connected", "session_registered")) initialization.add(item)
+            } }
+            initialization.addAll(graph.nativeInstances.events(run.row.projectId).filter { it.optString("diagnosticRunId") == run.row.id && it.optString("phase") in setOf("plugin_loading", "plugin_initialized", "plugin_init_failed") })
+            for (i in 0 until observed.length()) {
+                val process = observed.getJSONObject(i)
+                val pid = process.getInt("pid")
+                process.put("observed", true).put("initializationEvidence", JSONArray(initialization.filter {
+                    it.optInt("pid") == pid && (!it.has("startTicks") || it.optLong("startTicks") == process.getLong("startTicks"))
+                }.map { JSONObject(it.toString()).put("identityMatch", if (it.has("startTicks")) "PID_START_TICKS" else "PID_IN_RUN_WINDOW") }))
+                process.put("exitEvidence", JSONArray((0 until report.getJSONArray("exits").length()).map { report.getJSONArray("exits").getJSONObject(it) }.filter { it.optInt("pid") == pid && it.optString("processName") == process.getString("processName") && it.optLong("timestamp") >= process.getLong("observedWallTime") }.map { JSONObject(it.toString()).put("identityMatch", "PID_NAME_TIME_WITHOUT_START_TICKS") }))
+                process.put("aliveAtEnd", JSONObject.NULL)
+                if (root) {
+                    val (code, stat) = command(raw, "cat /proc/" + pid + "/stat")
+                    if (code == 0) process.put("aliveAtEnd", stat.substringAfterLast(") ").split(' ')[19].toLong() == process.getLong("startTicks"))
+                    process.put("livenessCheckedAt", System.currentTimeMillis()).put("livenessSource", "/proc/PID/stat")
+                }
+            }
+            report.put("collectionComplete", state == "COMPLETE" && root && monitorFailure == null && logFailure == null)
+            report.put("observation", DiagnosticEvidence.observation(observed, report.getBoolean("collectionComplete")))
             report.put("conclusion", DiagnosticEvidence.conclusion(report.getJSONArray("tombstones"), report.getJSONArray("exits")))
             event(run, "collection_finished", JSONObject().put("state", state))
             run.row = run.row.copy(state = state, finishedAt = endWall)

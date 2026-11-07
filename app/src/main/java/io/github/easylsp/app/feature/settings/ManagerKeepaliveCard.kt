@@ -13,10 +13,7 @@ import io.github.easylsp.app.ui.components.AppCard
     AppCard {
         Text("UID0 管理器保活", style = MaterialTheme.typography.titleMedium)
         Text(keeper.detail, style = MaterialTheme.typography.bodySmall)
-        Text("root 授权后自动配置。降低管理器被回收的概率，解除进程冻结；开机自动启动保活服务。关闭后恢复本次服务修改的进程设置。", style = MaterialTheme.typography.bodySmall)
-        ListItem(headlineContent = { Text("启用 UID0 保活") }, trailingContent = {
-            Switch(keeper.enabled, { enabled -> vm.action { vm.graph.managerKeepalive.setEnabled(enabled).detail } }, enabled = root.granted && !busy)
-        })
+        Text("开发任务运行时按需保护管理进程，任务结束后恢复设置并退出。日常使用已发布插件无需管理器常驻。", style = MaterialTheme.typography.bodySmall)
         TextButton(enabled = root.granted && !busy, onClick = { vm.action { vm.graph.managerKeepalive.reconcile().detail } }) { Text("刷新 / 修复保活") }
     }
 }

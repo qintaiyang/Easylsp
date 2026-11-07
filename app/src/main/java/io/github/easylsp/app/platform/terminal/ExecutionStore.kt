@@ -50,6 +50,6 @@ class ExecutionStore(private val root: File) {
             var remaining = offset.toLong(); while (remaining > 0) { val skipped = reader.skip(remaining); if (skipped == 0L) break; remaining -= skipped }
             val chars = CharArray(limit + 1); var size = 0; while (size < chars.size) { val n = reader.read(chars, size, chars.size - size); if (n < 0) break; size += n }; String(chars, 0, size)
         } ?: ""
-        return JSONObject().put("id", id).put("kind", row.kind).put("state", row.state).put("exitCode", row.exitCode ?: JSONObject.NULL).put("text", text.take(limit)).put("nextOffset", if (text.length > limit) offset + limit else JSONObject.NULL)
+        return JSONObject().put("id", id).put("readTool", "read_execution").put("unit", "utf16").put("offset", offset).put("kind", row.kind).put("state", row.state).put("exitCode", row.exitCode ?: JSONObject.NULL).put("text", text.take(limit)).put("nextOffset", if (text.length > limit) offset + limit else JSONObject.NULL)
     }
 }

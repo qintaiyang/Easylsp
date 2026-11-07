@@ -57,7 +57,8 @@ JNIEXPORT jobjectArray JNICALL Java_io_github_easylsp_nativeengine_NativeRuntime
     jobject list = (*env)->NewObject(env, array_list, (*env)->GetMethodID(env, array_list, "<init>", "()V"));
     if (!list) return NULL;
     struct event_list buffer = {env, list, (*env)->GetMethodID(env, array_list, "add", "(Ljava/lang/Object;)Z")};
-    sh_core_read_events(append_event, &buffer);
+    static uint64_t cursor;
+    sh_core_read_events_since(&cursor, append_event, &buffer);
     if ((*env)->ExceptionCheck(env)) return NULL;
     jclass string = (*env)->FindClass(env, "java/lang/String");
     if (!string) return NULL;

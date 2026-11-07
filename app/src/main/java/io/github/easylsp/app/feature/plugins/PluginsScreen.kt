@@ -16,7 +16,7 @@ import io.github.easylsp.app.data.*
 import io.github.easylsp.app.ui.components.*
 
 fun runtimeLabel(state: String?): String = when (state) {
-    "OFFLINE" -> "目标离线"; "RUNNING" -> "运行中"; "LOADING" -> "加载中"; "UNLOADING" -> "卸载中"; "FAILED", "ERROR" -> "运行错误"; "UNLOADED", "STOPPED" -> "已卸载"; else -> "未加载"
+    "OFFLINE" -> "桥接离线，业务状态未确认"; "RUNNING" -> "运行中"; "LOADING" -> "加载中"; "UNLOADING" -> "卸载中"; "FAILED", "ERROR" -> "运行错误"; "UNLOADED", "STOPPED" -> "已卸载"; else -> "未收到实例报告"
 }
 
 @Composable fun PluginsScreen(vm: MainViewModel, project: ProjectEntity, edit: (String) -> Unit, importPlugin: () -> Unit, logs: (String?) -> Unit) {
@@ -24,18 +24,23 @@ fun runtimeLabel(state: String?): String = when (state) {
     val sessions by vm.sessions.collectAsStateWithLifecycle()
     val instances by vm.instances.collectAsStateWithLifecycle()
     val busy by vm.busy.collectAsStateWithLifecycle()
+    val publications by vm.graph.javaDeployments.snapshots.collectAsStateWithLifecycle()
     var create by rememberSaveable { mutableStateOf(false) }
     val items = plugins.filter { it.projectId == project.id }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
             Button(onClick = { create = true }, enabled = !busy) { Icon(AppIcons.Add, null); Text("新建插件") }
             TextButton(onClick = importPlugin, enabled = !busy) { Text("导入 ZIP") }
+            TextButton(enabled = !busy && project.kind == "INSTALLED", onClick = { vm.action { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { vm.graph.javaDeployments.publish(project.id, refresh = true) }; "已发布当前 Java revision；下次目标启动生效" } }) { Text("发布 Java") }
         }
         if (items.isEmpty()) EmptyState("开始编写第一个插件", "选择空白插件或 before / after / replace 模板，保存后显式加载到目标。")
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             items(items, key = { it.id }) { plugin ->
-                val host = sessions.values.firstOrNull { it.packageName == project.packageName && it.processName == plugin.processName.ifEmpty { project.packageName } }
+                val host = sessions.values.firstOrNull { it.uid / 100000 == project.userId && it.packageName == project.packageName && it.processName == plugin.processName.ifEmpty { project.packageName } }
                 val instance = host?.let { instances["${it.id}/${plugin.id}"] }
+                val published = publications[project.id]?.getJSONArray("plugins")?.let { rows ->
+                    (0 until rows.length()).map { rows.getJSONObject(it) }.firstOrNull { it.getString("pluginId") == plugin.id }
+                }
                 AppCard {
                     Row {
                         Column(Modifier.weight(1f).clickable { edit(plugin.id) }) {
@@ -48,7 +53,8 @@ fun runtimeLabel(state: String?): String = when (state) {
                     if (plugin.runtime == "NATIVE") NativePluginActions(vm, project, plugin)
                     else Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         StatusBadge(if (plugin.desiredEnabled) "期望启用" else "期望停用")
-                        StatusBadge(if (host == null) "目标离线" else runtimeLabel(instance?.state), instance?.state == "RUNNING", instance?.state in listOf("FAILED", "ERROR"))
+                        if (plugin.desiredEnabled) StatusBadge(published?.let { "已发布 r" + it.getLong("revision") } ?: "未发布，离线启动不可用", error = published == null)
+                        StatusBadge(if (host == null) "桥接离线，业务状态未确认" else runtimeLabel(instance?.state), instance?.state == "RUNNING", instance?.state in listOf("FAILED", "ERROR"))
                         if (instance?.state == "RUNNING" && plugin.revision != instance.revision) StatusBadge("待重载")
                     }
                     PluginReleaseActions(vm, project, plugin)

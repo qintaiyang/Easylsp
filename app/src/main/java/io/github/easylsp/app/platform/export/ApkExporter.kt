@@ -65,6 +65,7 @@ class ApkExporter(private val graph: EasylspApp) {
     suspend fun export(pluginId: String): File = withContext(Dispatchers.IO) {
         val plugin = graph.store.dao.plugin(pluginId) ?: error("插件不存在")
         require(plugin.runtime == "BEANSHELL") { "首版尚不支持 native 独立 APK 导出" }
+        require(io.github.easylsp.app.data.ReleaseDependencies.installedOrder(plugin, graph.store.dao.plugins(plugin.projectId)).size == 1) { "独立 APK 仅包含单个 Java 插件和库；联合发行或插件依赖请使用完整发布" }
         val project = graph.store.dao.project(plugin.projectId) ?: error("项目不存在")
         val folder = File(graph.cacheDir, "exports").apply { mkdirs() }
         val unsigned = File(folder, "${plugin.id}-unsigned.apk")

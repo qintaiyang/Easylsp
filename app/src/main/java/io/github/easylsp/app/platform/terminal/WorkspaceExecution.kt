@@ -61,9 +61,12 @@ class WorkspaceExecution(private val root: File, val runner: CommandRunner = Com
     }
     suspend fun await(projectId: String, id: String): JSONObject { requireRecord(projectId, id); jobs[id]?.join(); return store.page(projectId, id, 0, 12000) }
     suspend fun waitFor(projectId: String, id: String, seconds: Int): JSONObject {
+        waitUntil(projectId, id, seconds)
+        return store.page(projectId, id, 0, 12000)
+    }
+    suspend fun waitUntil(projectId: String, id: String, seconds: Int) {
         require(seconds in 1..60) { "waitSeconds 必须在 1..60 秒范围内" }; requireRecord(projectId, id)
         withTimeoutOrNull(seconds * 1000L) { jobs[id]?.join() }
-        return store.page(projectId, id, 0, 12000)
     }
     fun stop(projectId: String, id: String) { requireRecord(projectId, id); val job = jobs[id]; if (job != null) job.cancel() else ptyStop?.invoke(projectId, id) }
     suspend fun stopConversation(id: String) {

@@ -81,7 +81,7 @@ class DiagnosticEvidenceTest {
         assertEquals("NATIVE_FATAL_SIGNAL", rows.getJSONObject(1).getString("classification"))
         assertFalse(rows.getJSONObject(0).has("frames"))
         assertEquals("MULTIPLE", DiagnosticEvidence.conclusion(JSONArray(), rows).getString("classification"))
-        assertEquals("UNKNOWN", DiagnosticEvidence.conclusion(JSONArray(), JSONArray()).getString("classification"))
+        assertEquals("NO_EXIT_EVIDENCE", DiagnosticEvidence.conclusion(JSONArray(), JSONArray()).getString("classification"))
     }
     @Test fun collectionLimitIsRejectedBeforeTheActionRuns() {
         val schema = BuiltinToolSchemas.create("start_native_diagnostic", mapOf("mode" to "string", "restart" to "boolean", "durationSeconds" to "integer"), emptyList())

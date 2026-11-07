@@ -92,10 +92,11 @@ class WorkflowTools(private val graph: EasylspApp) {
             JSONObject().put("skillId", item.id).put("name", item.name)
         }
         add("list_target_sessions", "Read framework activation, root and all connected processes for the project; choose a sessionId for inspection or plugin actions.") {
-            JSONObject().put("framework", graph.framework.state.value.description).put("root", graph.root.state.value.detail).put("sessions", JSONArray(graph.bridge.sessions.value.values.filter { it.uid / 100000 == project.userId && it.packageName == project.packageName }.map { JSONObject().put("id", it.id).put("processName", it.processName).put("pid", it.pid) }))
+            JSONObject().put("framework", graph.framework.state.value.description).put("root", graph.root.state.value.detail).put("sessions", JSONArray(graph.bridge.sessions.value.values.filter { it.uid / 100000 == project.userId && it.packageName == project.packageName }.map { graph.bridge.identity(it) }))
         }
         add("start_target", "Launch the selected app. restart=true force-stops its old processes first. Native execution does not require a Java session; query get_native_plugin_status after launch.", mapOf("restart" to "boolean"), writes = true) { args ->
             require(project.kind == "INSTALLED") { "导入 APK 仅支持静态分析" }
+            if (graph.framework.state.value.active) graph.framework.requestJavaDebug(requireNotNull(graph.targetApplications.info(project.packageName, project.userId).applicationInfo).uid, project.packageName)
             if (args.optBoolean("restart")) {
                 require(graph.root.useRoot()) { "重启目标需要已授予的 root" }
                 val output = StringBuilder()
@@ -103,21 +104,23 @@ class WorkflowTools(private val graph: EasylspApp) {
                 check(result.exitCode == 0) { output.toString() }
             }
             val sameUser = project.userId == android.os.Process.myUid() / 100000
+            val launch = if (sameUser) requireNotNull(graph.packageManager.getLaunchIntentForPackage(project.packageName)) { "目标无启动入口" } else null
             if (args.optBoolean("restart") || !sameUser) {
                 require(graph.root.useRoot()) { "跨用户启动需要root" }
                 val output = StringBuilder()
-                val result = graph.executions.runner.execute(java.util.UUID.randomUUID().toString(), listOf(graph.root.su, "-c", "am start --user ${project.userId} -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p ${RootCommand.quote(project.packageName)}"), graph.filesDir, closeInput = true) { output.append(it) }
+                val command = "am start --user ${project.userId} -W " + (launch?.component?.let { "-n " + RootCommand.quote(it.flattenToString()) } ?: "-a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p " + RootCommand.quote(project.packageName))
+                val result = graph.executions.runner.execute(java.util.UUID.randomUUID().toString(), listOf(graph.root.su, "-c", command), graph.filesDir, closeInput = true) { output.append(it) }
                 check(result.exitCode == 0 && !output.contains("Error:")) { output.toString() }
             } else {
-                val intent = requireNotNull(graph.packageManager.getLaunchIntentForPackage(project.packageName)) { "目标无启动入口" }
+                val intent = requireNotNull(launch)
                 graph.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             }
             if (graph.store.nativePlugins.published(project.id)?.policy == "NATIVE_ONLY") return@add JSONObject().put("started", true).put("restarted", args.optBoolean("restart")).put("note", "NATIVE_ONLY 不建立 Java session；查询 native 插件实际实例和目标行为")
-            graph.sendBroadcast(Intent("io.github.easylsp.RECONNECT").setPackage(project.packageName))
+            graph.bridge.reconnect(project.packageName)
             val connected = withTimeoutOrNull(10000) { graph.bridge.sessions.first { rows -> rows.values.any { it.uid / 100000 == project.userId && it.packageName == project.packageName } } }
             JSONObject().put("started", true).put("sessions", JSONArray(connected?.values?.filter { it.uid / 100000 == project.userId && it.packageName == project.packageName }?.map { JSONObject().put("sessionId", it.id).put("processName", it.processName) } ?: emptyList<JSONObject>())).put("note", if (connected == null) "目标启动请求已发出，尚无 Java session；这不能判定 native 是否执行" else "目标已连接")
         }
-        add("reconnect_target", "Reconnect the running project target; read sessions after this action.", writes = true) { graph.sendBroadcast(Intent("io.github.easylsp.RECONNECT").setPackage(project.packageName)); JSONObject().put("requested", true) }
+        add("reconnect_target", "Reconnect the running project target; read sessions after this action.", writes = true) { graph.bridge.reconnect(project.packageName); JSONObject().put("requested", true) }
         for (restart in listOf(false, true)) add(if (restart) "restart_target" else "stop_target", "${if (restart) "Restart" else "Force stop"} the target app using device root. This ends all of its processes.", writes = true) {
             require(project.kind == "INSTALLED"); require(graph.root.useRoot()) { "需要在设备 root 管理器授权" }
             val output = StringBuilder(); val result = graph.executions.runner.execute(java.util.UUID.randomUUID().toString(), listOf(graph.root.su, "-c", "am force-stop --user ${project.userId} ${RootCommand.quote(project.packageName)}"), graph.filesDir, closeInput = true) { output.append(it) }
@@ -125,21 +128,33 @@ class WorkflowTools(private val graph: EasylspApp) {
             if (restart) graph.startActivity(requireNotNull(graph.packageManager.getLaunchIntentForPackage(project.packageName)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             JSONObject().put("stopped", true).put("restarted", restart)
         }
+        add("switch_conversation_sample", "Explicitly bind a saved sample for subsequent turns. Current turn keeps its binding; records previous/new revision.", mapOf("sampleRevision" to "integer"), listOf("sampleRevision"), true) { args ->
+            val revision = args.getLong("sampleRevision")
+            requireNotNull(graph.store.dao.sample(project.id, revision)) { "样本不存在" }
+            val conversation = requireNotNull(graph.store.workflows.conversation(binding.conversationId))
+            graph.store.workflows.saveConversation(conversation.copy(sampleRevision = revision))
+            val change = JSONObject().put("conversationId", conversation.id).put("previousRevision", conversation.sampleRevision).put("sampleRevision", revision).put("timestamp", System.currentTimeMillis())
+            File(graph.executions.directory(project.id), "sample-binding-history.jsonl").appendText(change.toString() + "\n")
+            change.put("effective", "next_turn")
+        }
+        add("publish_java_plugins", "Publish saved Java revisions for next startup; current instances retain revisions until explicit reload/restart.", writes = true) {
+            graph.javaDeployments.publish(project.id, refresh = true)
+        }
+        add("get_plugin_coverage", "Compact current coverage: saved/published versions and observed processes. Pages plugins; optionally filter pluginId/processName. No current evidence means unknown. Native history and event details use get_native_plugin_status(scope=history) and read_plugin_logs. Matching does not prove functional success.", mapOf("pluginId" to "string", "processName" to "string", "cursor" to "integer", "limit" to "integer")) { ProjectContext.coverage(graph, binding, it) }
         add("capture_sample", "Capture installed APK/splits as a new immutable sample. Current conversation keeps its original sample; use analysis_query with returned revision for new data.", writes = true) { val sampled = graph.samples.capture(project); JSONObject().put("sampleRevision", sampled.sampleRevision) }
         add("analysis_query", "Run any static analysis operation on a specific saved sample revision: info/classes/methods/fields/strings/references/java/smali/manifest/resources/resource. Arguments match built-in analysis tools and support offset/limit.", mapOf("action" to "string", "sampleRevision" to "integer", "arguments" to "object"), listOf("action", "arguments")) { args ->
-            val action = args.getString("action"); require(action in setOf("info", "classes", "methods", "fields", "strings", "references", "java", "smali", "manifest", "resources", "resource"))
+            val action = args.getString("action"); ToolArguments.validate(BuiltinToolSchemas.analysis(action), args.getJSONObject("arguments")); require(action in setOf("info", "classes", "methods", "fields", "strings", "references", "java", "smali", "manifest", "resources", "resource"))
             graph.analysis.call(project.id, args.optLong("sampleRevision", binding.sampleRevision), action, args.getJSONObject("arguments"))
         }
         add("set_plugin_enabled", "Set expected enabled state independently of running state. Use explicit load/reload/unload to change target instances.", mapOf("pluginId" to "string", "enabled" to "boolean"), listOf("pluginId", "enabled"), true) { args -> val item = plugin(args); graph.store.enable(item.id, args.getBoolean("enabled")); JSONObject().put("enabled", args.getBoolean("enabled")) }
-        add("plugin_action", "Load/reload/unload/status a plugin in an explicit project session. operation is loadPlugin/reloadPlugin/unloadPlugin/getPluginState. Returns actual running state and revision.", mapOf("pluginId" to "string", "sessionId" to "string", "operation" to "string"), listOf("pluginId", "sessionId", "operation"), true) { args ->
-            val item = plugin(args); val sessionId = args.getString("sessionId")
-            val session = graph.bridge.sessions.value[sessionId] ?: error("目标会话 $sessionId 已离线；请调用 list_target_sessions 查询在线目标，或重新连接目标")
-            require(session.packageName == project.packageName) { "目标会话 $sessionId 不属于当前项目" }
+        add("plugin_action", "Load/reload/unload/status a plugin in an explicit project session. operation is loadPlugin/reloadPlugin/unloadPlugin/getPluginState. Returns actual running state and revision.", mapOf("pluginId" to "string", "sessionId" to "string", "operation" to "string"), listOf("pluginId", "operation"), true) { args ->
+            val item = plugin(args); val sessionId = args.optString("sessionId")
+            val session = graph.bridge.resolve(project, sessionId)
             val operation = args.getString("operation"); require(operation in setOf("loadPlugin", "reloadPlugin", "unloadPlugin", "getPluginState"))
             if (operation == "loadPlugin" || operation == "reloadPlugin") graph.store.enable(item.id, true)
             val result = graph.bridge.commandSession(session.id, operation, item.id)
             val state = graph.bridge.instances.value["${session.id}/${item.id}"]
-            JSONObject().put("result", result).put("state", state?.state ?: "UNKNOWN").put("revision", state?.revision ?: JSONObject.NULL).put("sessionId", session.id).put("pluginId", item.id).put("validation", "加载状态不代表功能验证完成")
+            graph.bridge.identity(session).put("result", result).put("state", state?.state ?: "UNKNOWN").put("revision", state?.revision ?: JSONObject.NULL).put("sessionId", session.id).put("pluginId", item.id).put("validation", "加载状态不代表功能验证完成")
         }
         add("edit_plugin_metadata", "Edit plugin name/author/description/version and process matching scope (exact/main/children/all). Saves a new revision without changing running instances.", mapOf("pluginId" to "string", "name" to "string", "author" to "string", "description" to "string", "version" to "string", "processName" to "string", "processScope" to "string"), listOf("pluginId"), true) { args ->
             val item = plugin(args); val scope = args.optString("processScope", item.processScope); require(scope in setOf("exact", "main", "children", "all"))
@@ -170,14 +185,46 @@ class WorkflowTools(private val graph: EasylspApp) {
             graph.store.save(item.id, item.name, item.author, item.description, item.version, files.getValue(item.entry), files = files)
             JSONObject().put("revision", item.revision + 1)
         }
-        add("inspect_target", "Read View tree/properties, capture creation stacks, select target UI overlays or sample performance. Operations: viewTree/creationStacks/inspectOverlay/performanceStart/performanceRead/performanceStop/memory. Always use an explicit project session.", mapOf("sessionId" to "string", "operation" to "string", "arguments" to "object"), listOf("sessionId", "operation"), true) { args ->
-            val sessionId = args.getString("sessionId")
-            val session = graph.bridge.sessions.value[sessionId] ?: error("目标会话 $sessionId 已离线；请调用 list_target_sessions 查询在线目标，或重新连接目标")
-            require(session.packageName == project.packageName) { "目标会话 $sessionId 不属于当前项目" }
-            val operation = args.getString("operation"); require(operation in setOf("viewTree", "creationStacks", "inspectOverlay", "performanceStart", "performanceRead", "performanceStop", "performanceOverlay", "memory"))
-            val bundle = android.os.Bundle(); val values = args.optJSONObject("arguments") ?: JSONObject()
+        add("end_target_debug", "Release this target's frame sampling, View creation stack hooks, overlays and bridge connection. Business plugins remain loaded. Reconnect explicitly for further debugging.", mapOf("sessionId" to "string"), writes = true) { args ->
+            val session = graph.bridge.resolve(project, args.optString("sessionId"))
+            graph.bridge.identity(session).put("result", graph.bridge.commandSession(session.id, "disconnectDebug"))
+        }
+        add("inspect_target", "Read View tree/properties, capture creation stacks, select target UI overlays or sample performance. Operations: viewTree/viewNode/viewClick/viewScroll/creationStacks/inspectOverlay/performanceStart/performanceRead/performanceStop/performanceOverlay/memory. Activity/Dialog/PopupWindow roots are included. Node operations require path and snapshotId from current viewTree. Click/scroll return a compact node by default; includeSnapshot=true adds a snapshot bounded by snapshotLimit (default 10, 1..100). Omit sessionId only for a unique online project target. Use end_target_debug to release debugging resources.", mapOf("sessionId" to "string", "operation" to "string", "arguments" to "object"), listOf("operation"), true) { args ->
+            val sessionId = args.optString("sessionId")
+            val session = graph.bridge.resolve(project, sessionId)
+            val operation = args.getString("operation"); require(operation in setOf("viewNode", "viewClick", "viewScroll", "viewTree", "creationStacks", "inspectOverlay", "performanceStart", "performanceRead", "performanceStop", "performanceOverlay", "memory"))
+            val bundle = android.os.Bundle(); val values = args.optJSONObject("arguments") ?: JSONObject(); ToolArguments.validate(BuiltinToolSchemas.inspection(operation), values)
             values.keys().forEach { key -> when (val value = values.get(key)) { is String -> bundle.putString(key, value); is Boolean -> bundle.putBoolean(key, value); is Number -> bundle.putInt(key, value.toInt()) } }
-            JSONObject(graph.bridge.commandSession(session.id, operation, arguments = bundle))
+            JSONObject(graph.bridge.commandSession(session.id, operation, arguments = bundle)).put("target", graph.bridge.identity(session))
+        }
+        add("record_plugin_validation", "Record observed functional acceptance separately from build/init/hook/hit. Provide concrete evidence and PASS/FAIL/NOT_TESTED; never infer PASS from loading.", mapOf("pluginId" to "string", "sessionId" to "string", "result" to "string", "evidence" to "string"), listOf("pluginId", "result", "evidence"), true) { args ->
+            val item = plugin(args); val result = args.getString("result"); require(result in setOf("PASS", "FAIL", "NOT_TESTED"))
+            val record = JSONObject().put("pluginId", item.id).put("savedRevision", item.revision).put("result", result).put("evidence", args.getString("evidence")).put("timestamp", System.currentTimeMillis())
+            if (args.has("sessionId")) record.put("target", graph.bridge.identity(graph.bridge.resolve(project, args.getString("sessionId"))))
+            File(graph.executions.directory(project.id), "plugin-validation.jsonl").appendText(record.toString() + "\n")
+            record
+        }
+        add("java_hook_metrics", "Opt in to Java hook hit/exception counters or read current totals. Installation, hit and functional success are distinct. No argument or stack capture per hit.", mapOf("pluginId" to "string", "sessionId" to "string", "enabled" to "boolean"), listOf("pluginId")) { args ->
+            val item = plugin(args); val session = graph.bridge.resolve(project, args.optString("sessionId"))
+            val bundle = android.os.Bundle(); if (args.has("enabled")) bundle.putBoolean("enabled", args.getBoolean("enabled"))
+            JSONObject(graph.bridge.commandSession(session.id, "hookMetrics", item.id, bundle)).put("target", graph.bridge.identity(session))
+        }
+        add("debug_target_once", "Execute BeanShell once on a dedicated worker. context/classLoader/reflect/hook available. Return reflect.inspect(object) for structured bounded fields. result preserves JSON objects/arrays/scalars/null; arbitrary object graphs are bounded and report truncation. Errors carry stable codes including SCRIPT_TIMEOUT. timeoutMs 1..5000, default 3000; closes hooks and interrupts on timeout, cannot force-kill user code ignoring interrupts. UI Activity/View/adapter templates use inspect_target viewTree/viewNode.", mapOf("sessionId" to "string", "source" to "string", "timeoutMs" to "integer"), listOf("source"), true) { args ->
+            val session = graph.bridge.resolve(project, args.optString("sessionId"))
+            val bundle = android.os.Bundle().apply { putString("source", args.getString("source")); putInt("timeoutMs", args.optInt("timeoutMs", 3000)) }
+            JSONObject(graph.bridge.commandSession(session.id, "debugOnce", arguments = bundle)).put("target", graph.bridge.identity(session))
+        }
+        add("read_runtime_memory", "Read 1..4096 bytes from one readable target mapping, with PID/startTicks/time/range/provenance. Optional bounded AArch64 disassembly is interpretation, not execution evidence.", mapOf("sessionId" to "string", "address" to "string", "length" to "integer", "diagnosticRunId" to "string", "disassemble" to "boolean"), listOf("address")) { args ->
+            val session = graph.bridge.resolve(project, args.optString("sessionId"))
+            val bundle = android.os.Bundle().apply { putString("address", args.getString("address")); putInt("length", args.optInt("length", 256)); putString("diagnosticRunId", args.optString("diagnosticRunId")) }
+            if (args.has("diagnosticRunId")) graph.diagnostics.store.requireRun(project.id, args.getString("diagnosticRunId"))
+            val snapshot = JSONObject(graph.bridge.commandSession(session.id, "memorySnapshot", arguments = bundle)).put("target", graph.bridge.identity(session))
+            if (args.optBoolean("disassemble")) {
+                val command = "printf '%s\n' " + RootCommand.quote(snapshot.getString("hex")) + " | llvm-mc --disassemble --triple=aarch64"
+                val execution = graph.executions.start(binding.workspace.id, "disassembly", "运行时内存反汇编") { id, output -> graph.executions.runner.execute(id, graph.linux.command(binding.workspace.id, command), graph.executions.directory(binding.workspace.id), closeInput = true, timeoutSeconds = 30, output = output).exitCode }
+                snapshot.put("disassembly", graph.executions.waitFor(binding.workspace.id, execution, 1)).put("disassemblyBase", snapshot.getString("address"))
+            }
+            snapshot
         }
         add("linux_status", "Read actual Ubuntu installation and device root status, not the Linux user's identity.") { JSONObject().put("installed", graph.linux.installed).put("status", graph.linux.status.value).put("rootGranted", graph.root.state.value.granted) }
         add("install_linux", "Download Ubuntu 24.04 arm64 from its official source and install into private storage using device root. Run only when Linux/Python/Node tools are needed.", writes = true) {
@@ -189,10 +236,10 @@ class WorkflowTools(private val graph: EasylspApp) {
             }
             JSONObject().put("executionId", id).put("note", "下载与解压在后台执行，用 read_execution 查看进度")
         }
-        add("run_linux", "Run Ubuntu bash in /workspace/<projectId>, sharing files with run_command's project workspace. Use for Python, Node, apt-get and Linux tools; check linux_status for installation. Android am/cmd/logcat and target app private paths belong in run_command. Returns an executionId; query with read_execution without rerunning the command. backend chroot (default) or installed Termux proot.", mapOf("command" to "string", "timeoutSeconds" to "integer", "backend" to "string"), listOf("command"), true) { args ->
+        add("run_linux", "Run Ubuntu bash in /workspace/<projectId>, sharing files with run_command's project workspace. Use for Python, Node, apt-get and Linux tools; check linux_status for installation. Android am/cmd/logcat and target app private paths belong in run_command. Returns an executionId; query with read_execution without rerunning the command. backend chroot (default) or installed Termux proot.", mapOf("command" to "string", "timeoutSeconds" to "integer", "backend" to "string", "waitSeconds" to "integer"), listOf("command"), true) { args ->
             val command = graph.linux.command(binding.workspace.id, args.getString("command"), args.optString("backend", "chroot"))
             val id = graph.executions.start(binding.workspace.id, "linux", args.getString("command")) { id, output -> graph.executions.runner.execute(id, command, graph.executions.directory(binding.workspace.id), closeInput = true, timeoutSeconds = args.optInt("timeoutSeconds", 600), output = output).exitCode }
-            JSONObject().put("executionId", id)
+            graph.executions.waitFor(binding.workspace.id, id, args.optInt("waitSeconds", 1)).put("executionId", id)
         }
         add("import_skill_github", "Import a SKILL.md package from a GitHub repository/tree URL. Imported package starts disabled; inspect before enabling.", mapOf("url" to "string"), listOf("url"), true) { args -> val skill = graph.skillPackages.github(args.getString("url")); JSONObject().put("skillId", skill.id).put("name", skill.name) }
         add("list_provider_models", "Fetch real available model IDs from an already configured provider. Secrets stay in Keystore.", mapOf("providerId" to "string"), listOf("providerId")) { args -> val provider = requireNotNull(graph.store.workflows.provider(args.getString("providerId"))); JSONObject().put("models", JSONArray(ProviderModels().list(provider, graph.secrets.get("provider:${provider.id}")).map { it.id })) }

@@ -17,7 +17,8 @@ class WorkspaceTools(private val graph: EasylspApp, private val binding: RunBind
         try { for (lock in locks) { lock.lock(); held += lock }; return block() }
         finally { held.asReversed().forEach { it.unlock() } }
     }
-    private fun file(path: String): File = File(path).let { if (it.isAbsolute) it else File(graph.executions.directory(binding.workspace.id), path) }.canonicalFile
+    private fun file(path: String): File = File(if (path.startsWith("/workspace/" + binding.workspace.id + "/"))
+        graph.executions.directory(binding.workspace.id).path + "/" + path.removePrefix("/workspace/" + binding.workspace.id + "/") else path).let { if (it.isAbsolute) it else File(graph.executions.directory(binding.workspace.id), path) }.canonicalFile
     fun definitions(): List<ToolDefinition> {
         val tools = mutableListOf<ToolDefinition>()
         fun add(name: String, description: String, fields: Map<String,String>, required: List<String>, writes: Boolean = false, call: suspend (JSONObject) -> JSONObject) {
@@ -36,6 +37,7 @@ class WorkspaceTools(private val graph: EasylspApp, private val binding: RunBind
         add("read_file", "Read a UTF-8 text file by zero-based line offset; nextOffset continues reading the same file.", mapOf("path" to "string", "offset" to "integer", "limit" to "integer"), listOf("path")) { args ->
             val target = file(args.getString("path")); val offset = args.optInt("offset", 0); val limit = args.optInt("limit", 200)
             require(offset >= 0 && limit > 0)
+            require(target.canRead()) { "无法读取 " + target.path + "；读取身份 uid=" + android.os.Process.myUid() + "；请由生成该产物的任务赋予项目组读取权限" }
             val lines = target.useLines { it.drop(offset).take(limit + 1).toList() }
             JSONObject().put("path", target.path).put("unit", "lines").put("startLine", offset + 1).put("text", lines.take(limit).joinToString("\n"))
                 .put("nextOffset", if (lines.size > limit) offset + limit else JSONObject.NULL)

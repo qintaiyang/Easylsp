@@ -10,22 +10,11 @@ class EasylspApp : Application() {
     override fun onCreate() {
         super.onCreate()
         if (android.app.Application.getProcessName() == packageName) {
-            CoroutineScope(SupervisorJob() + Dispatchers.IO).launch { models.migrateConnections(); skillPackages.installPresets() }
-            CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-                root.state.collect { value ->
-                    if (value.granted && root.preferred.value) {
-                        try { managerKeepalive.reconcile() }
-                        catch (error: Exception) {
-                            if (error is CancellationException) throw error
-                            android.util.Log.e("EasylspKeepalive", "UID0 keeper setup failed", error)
-                        }
-                    }
-                }
-            }
             framework.connect()
-            if (root.preferred.value) root.refresh()
+
         }
     }
+    suspend fun initializeManagement() = withContext(Dispatchers.IO) { models.migrateConnections(); skillPackages.installPresets(); if (root.preferred.value) { root.refresh().await(); managerKeepalive.reconcile() } }
     val managerKeepalive by lazy { io.github.easylsp.app.platform.root.ManagerKeepalive(this) }
     val executions by lazy { io.github.easylsp.app.platform.terminal.WorkspaceExecution(filesDir, commandWrapper = root::wrap).apply {
         pty = { project, id, command, cwd, timeout, output -> terminals.execute(project, id, command, cwd, timeout, output) }
@@ -42,7 +31,7 @@ class EasylspApp : Application() {
     val agents by lazy { io.github.easylsp.app.platform.agents.AgentCoordinator(this) }
     val frida by lazy { io.github.easylsp.app.platform.frida.FridaBackend(this) }
     val apkExporter by lazy { io.github.easylsp.app.platform.export.ApkExporter(this) }
-    val store by lazy { ProjectStore(this) }
+    val store by lazy { ProjectStore(this, publishJava = { project, enabled -> javaDeployments.publish(project, enabled); Unit }) }
     val secrets by lazy { SecretStore(this) }
     val toolOutputs by lazy { io.github.easylsp.app.platform.tools.ToolOutputStore(java.io.File(filesDir, "tool-output")) }
     val models by lazy { io.github.easylsp.app.platform.config.ModelConfigurationService(this) }
@@ -62,6 +51,7 @@ class EasylspApp : Application() {
     val releaseActivation by lazy { io.github.easylsp.app.platform.market.ReleaseActivationService(this) }
     val releasePreparations by lazy { io.github.easylsp.app.platform.market.ReleasePreparationService(this) }
     val targetApplications by lazy { io.github.easylsp.app.platform.nativeplugins.TargetApplications(this) }
+    val javaDeployments by lazy { io.github.easylsp.app.platform.javaplugins.JavaDeploymentPublisher(this) }
     val nativeDeployments by lazy { io.github.easylsp.app.platform.nativeplugins.NativeDeploymentPublisher(this) }
     val nativeHost by lazy { io.github.easylsp.app.platform.nativeplugins.NativeHostClient(this) }
     val nativeInstances by lazy { io.github.easylsp.app.platform.nativeplugins.NativeInstanceStore(this) }

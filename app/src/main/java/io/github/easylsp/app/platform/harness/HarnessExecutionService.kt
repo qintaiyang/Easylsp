@@ -30,6 +30,7 @@ class HarnessExecutionService : Service() {
     private var ready = CompletableDeferred<HarnessConnection>()
     private val sockets = Mutex()
     private var reader: Job? = null
+    private var workLease: Job? = null
     private val sessionClients = java.util.concurrent.ConcurrentHashMap<String, HarnessSessionClient>()
     internal fun observation(id: String) = sessionClients[id]
     private val frames = MutableSharedFlow<JSONObject>(extraBufferCapacity = 64)
@@ -77,6 +78,7 @@ class HarnessExecutionService : Service() {
             catch (error: Exception) { notifyTasks(taskNotification(false, emptyList())) }
         }
     }
+    private val keeperOwner = java.util.UUID.randomUUID().toString()
     var disconnected = false
         private set
     val ended = CompletableDeferred<Unit>()
@@ -93,13 +95,24 @@ class HarnessExecutionService : Service() {
         else startForeground(NOTIFICATION, notification)
         showBubble()
         scope.launch { graph.store.workflows.observePendingInteractions().collect { refreshTaskNotification() } }
-        scope.launch {
+        workLease = scope.launch {
             try {
                 graph.harness.start()
+                graph.managerKeepalive.taskActive(keeperOwner, true)
                 reconnect()
+                while (isActive) {
+                    val dao = graph.store.workflows
+                    val work = graph.executions.store.records.value.any { it.state == "RUNNING" } || dao.allConversations().any {
+                        // UNKNOWN is a durable, unresolved receipt, not a live task. The host owns actual execution state.
+                        dao.nextInput(it.id) != null || dao.pendingInputs(it.id).any { input -> input.status != "UNKNOWN" } || graph.chat.isRunning(it.id)
+                    }
+                    request("host/work", JSONObject().put("active", work))
+                    delay(10000)
+                }
             } catch (error: Exception) {
+                if (error is CancellationException) throw error
                 ready.completeExceptionally(error)
-                graph.harness.serviceStatus.value = if (error is CancellationException) "执行服务已停止" else "执行服务已断开：${error.message}"
+                graph.harness.serviceStatus.value = "执行服务已断开：${error.message}"
                 stopSelf()
             }
         }
@@ -139,6 +152,16 @@ class HarnessExecutionService : Service() {
                 try {
                     for (frame in client.notifications) {
                         val params = frame.optJSONObject("params")
+                        if (frame.optString("method") == "host.idle") {
+                            workLease?.cancel(); notificationRefresh?.cancel()
+                            bindings.values.forEach { it.bridge.closeAndJoin(); it.tools.forEach { tool -> tool.close() } }; bindings.clear()
+                            graph.managerKeepalive.taskActive(keeperOwner, false)
+                            disconnected = true
+                            graph.harness.serviceStatus.value = "执行服务已空闲退出"
+                            connection?.close()
+                            stopForeground(STOP_FOREGROUND_REMOVE); ended.complete(Unit); stopSelf()
+                            return@launch
+                        }
                         sessionClients.values.firstOrNull { it.sessionId == params?.optString("sessionId") }?.accept(frame)
                         if (frame.optString("method") == "mcp.credentials") graph.mcp.credentials(params!!.getString("serverId"), params.getJSONObject("credentials"))
                         if (frame.optString("method") == "mcp.catalog-changed") graph.mcp.invalidate(params!!.getString("serverId"))
@@ -229,6 +252,7 @@ class HarnessExecutionService : Service() {
         sessionClients.keys.forEach { graph.phone.release(it) }
         bindings.values.forEach { it.bridge.close(); it.tools.forEach { tool -> tool.close() } }; bindings.clear()
         connection?.close(); scope.cancel()
+        CoroutineScope(Dispatchers.IO).launch { graph.managerKeepalive.taskActive(keeperOwner, false) }
         stopForeground(STOP_FOREGROUND_REMOVE)
         ended.complete(Unit)
         graph.harness.serviceStatus.value = "执行服务已停止"

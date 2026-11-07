@@ -30,8 +30,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val graph = application as EasylspApp
     val error = MutableStateFlow("")
     fun create(project: ProjectEntity, provider: ProviderEntity, done: (String) -> Unit) { viewModelScope.launch {
-        val id = withContext(Dispatchers.IO) { graph.conversations.create(project.id, provider.id).id }
-        done(id)
+        try {
+            val id = withContext(Dispatchers.IO) {
+                val model = graph.models.resolve(provider.id)
+                io.github.easylsp.app.platform.harness.HarnessConfig.model(model, graph.secrets.get(graph.models.credential(model)), "")
+                graph.harness.prepareAndWait()
+                graph.conversations.create(project.id, provider.id).id
+            }
+            error.value = ""
+            done(id)
+        } catch (failure: CancellationException) { throw failure }
+        catch (failure: Exception) { error.value = failure.message ?: failure.toString() }
     } }
     fun rename(id: String, name: String) { viewModelScope.launch(Dispatchers.IO) { graph.store.workflows.renameConversation(id, name.trim(), System.currentTimeMillis()) } }
     fun delete(projectId: String, id: String) { viewModelScope.launch(Dispatchers.IO) {
@@ -87,8 +96,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         Row(Modifier.padding(horizontal = 16.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             providers.forEach { provider -> FilterChip((providerId ?: providers.firstOrNull()?.id) == provider.id, { providerId = provider.id }, label = { Text(provider.name) }) }
         }
-        Button(enabled = providers.isNotEmpty() && project.sampleRevision > 0, onClick = { vm.create(project, providers.firstOrNull { it.id == providerId } ?: providers.first(), open) }, modifier = Modifier.padding(horizontal = 16.dp)) { Text("新建会话") }
-        if (providers.isEmpty()) EmptyState("连接你的 AI", "选择供应商并填写 API Key，模型列表会自动获取。之后直接描述想实现的效果。", "连接 AI", { configureModel = true })
+        Button(enabled = providers.isNotEmpty() && project.sampleRevision > 0, onClick = { vm.create(project, providers.firstOrNull { it.id == providerId } ?: providers.first(), open) }, modifier = Modifier.padding(horizontal = 16.dp)) { Text("准备并开始") }
+        if (providers.isEmpty()) EmptyState("连接你的 AI", "选择供应商并填写 API Key，获取模型并识别能力。之后直接描述想实现的效果。", "连接 AI", { configureModel = true })
         else if (project.sampleRevision == 0L) {
             if (preparing) LoadingState(sampleStatus)
             else EmptyState("还没准备好分析样本", sampleStatus, "重新准备", { scope.launch {

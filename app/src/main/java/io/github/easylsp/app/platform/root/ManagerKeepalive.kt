@@ -10,17 +10,16 @@ import java.io.File
 import java.util.UUID
 
 data class ManagerKeepaliveState(
-    val enabled: Boolean = true, val running: Boolean = false, val keeperUid: Int? = null,
+    val enabled: Boolean = false, val running: Boolean = false, val keeperUid: Int? = null,
     val keeperPid: Int? = null, val managerPid: Int? = null, val oomScoreAdj: Int? = null, val cgroup: String? = null,
     val binderStatus: String? = null, val hansStatus: String? = null,
-    val detail: String = "root 授权后自动开启 UID0 保活"
+    val detail: String = "实际开发任务运行时按需保护"
 )
 
 /** Root-owned service survives app restarts; the application keeps its Android UID. */
 class ManagerKeepalive(private val graph: EasylspApp) {
-    private val preference = graph.getSharedPreferences("manager-keepalive", 0)
     private val lock = Mutex()
-    val state = MutableStateFlow(ManagerKeepaliveState(enabled = preference.getBoolean("enabled", true)))
+    val state = MutableStateFlow(ManagerKeepaliveState())
     private val service = "/data/adb/service.d/easylsp-manager-keepalive.sh"
     private val directory = "/data/adb/easylsp-manager-keepalive"
 
@@ -36,7 +35,7 @@ class ManagerKeepalive(private val graph: EasylspApp) {
         for (name in listOf("service.sh", "unfreeze-uid")) graph.assets.open("manager-keepalive/$name").use { input -> File(staging, name).outputStream().use { input.copyTo(it) } }
         root("""
             set -e
-            if [ ! -f $directory/version ] || [ "${'$'}(cat $directory/version)" != 2 ]; then
+            if [ ! -f $directory/version ] || [ "${'$'}(cat $directory/version)" != 3 ]; then
                 if [ -f $directory/pid ]; then
                     read -r old < $directory/pid
                     case "${'$'}old" in ''|*[!0-9]*) old=;; esac
@@ -54,19 +53,19 @@ class ManagerKeepalive(private val graph: EasylspApp) {
                 cp ${RootCommand.quote(File(staging, "unfreeze-uid").path)} $directory/unfreeze-uid
                 chmod 700 $service $directory/unfreeze-uid
                 rm -f $directory/pid $directory/managers.json
-                printf 2 > $directory/version
+                printf 3 > $directory/version
             fi
         """.trimIndent())
     }
-    suspend fun reconcile(): ManagerKeepaliveState = withContext(Dispatchers.IO) {
-        lock.withLock { apply(preference.getBoolean("enabled", true)) }
+    @Volatile private var protectingTask = false
+    private val owners = mutableSetOf<String>()
+    suspend fun taskActive(owner: String, active: Boolean) = lock.withLock {
+        if (active) owners.add(owner) else owners.remove(owner)
+        protectingTask = owners.isNotEmpty()
+        if (graph.root.state.value.granted) apply(protectingTask)
     }
-    suspend fun setEnabled(enabled: Boolean): ManagerKeepaliveState = withContext(Dispatchers.IO) {
-        lock.withLock {
-            val value = apply(enabled)
-            check(preference.edit().putBoolean("enabled", enabled).commit())
-            value
-        }
+    suspend fun reconcile(): ManagerKeepaliveState = withContext(Dispatchers.IO) {
+        lock.withLock { apply(protectingTask) }
     }
     private suspend fun apply(enabled: Boolean): ManagerKeepaliveState {
         try {
@@ -86,7 +85,7 @@ class ManagerKeepalive(private val graph: EasylspApp) {
             throw error
         }
     }
-    suspend fun refresh(): ManagerKeepaliveState = withContext(Dispatchers.IO) { lock.withLock { readStatus(preference.getBoolean("enabled", true)) } }
+    suspend fun refresh(): ManagerKeepaliveState = withContext(Dispatchers.IO) { lock.withLock { readStatus(protectingTask) } }
     private suspend fun readStatus(requested: Boolean): ManagerKeepaliveState {
         val json = JSONObject(root("if [ -f $directory/version ]; then sh $service status; else echo '{\"enabled\":false,\"running\":false,\"managers\":[]}'; fi"))
         val managers = json.getJSONArray("managers")
@@ -97,7 +96,7 @@ class ManagerKeepalive(private val graph: EasylspApp) {
         val unfreeze = manager?.getJSONObject("unfreeze")
         val binder = unfreeze?.getString("binder")
         val hans = unfreeze?.getString("hans")
-        val detail = if (!requested) "UID0 保活已关闭，开机不再启动" else if (!running) "UID0 保活未运行" else if (manager == null) "UID0 保活已运行，等待管理器进程" else "UID$keeperUid 保活运行中 · 管理器 oom=$oom · 已配置开机启动"
+        val detail = if (!requested) "没有后台开发任务，保活已关闭" else if (!running) "后台任务保活未运行" else if (manager == null) "后台任务保活已运行，等待管理器进程" else "UID$keeperUid 任务保活运行中 · 管理器 oom=$oom"
         val limitations = listOfNotNull(
             if (binder in setOf("unsupported", "unavailable")) "系统未提供 Binder 解冻接口" else if (binder == "error") "Binder 解冻失败" else null,
             if (hans == "error") "厂商网络解冻失败" else null

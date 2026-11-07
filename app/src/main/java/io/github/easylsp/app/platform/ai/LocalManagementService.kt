@@ -62,6 +62,7 @@ class LocalManagementService(private val graph: EasylspApp) {
             }
     }
     suspend fun deleteProject(id: String) = withContext(Dispatchers.IO) { serial.withLock {
+        if (java.io.File(graph.filesDir, "java-publications/" + id + ".json").exists()) graph.javaDeployments.publish(id, emptyList())
         val project = requireNotNull(graph.store.dao.project(id)) { "项目已删除" }
         val plugins = graph.store.dao.plugins(id)
         graph.chat.deletingConversations {

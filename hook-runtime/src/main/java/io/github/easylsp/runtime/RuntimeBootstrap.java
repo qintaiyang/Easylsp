@@ -7,8 +7,12 @@ final class RuntimeBootstrap {
         start(app, driver, StartupDiagnostic.NONE);
     }
     static synchronized void start(Application app, HookDriver driver, StartupDiagnostic diagnostic) {
+        start(app, driver, diagnostic, null);
+    }
+    static synchronized void start(Application app, HookDriver driver, StartupDiagnostic diagnostic, JavaStartupSnapshot snapshot) {
         if (connection != null) return;
         connection = new HostConnection(app, driver, diagnostic);
-        connection.start();
+        if (snapshot != null && !diagnostic.suppressAutoLoad()) connection.loadPublished(snapshot);
+        connection.start(snapshot == null || !snapshot.published() || snapshot.debugRequested);
     }
 }

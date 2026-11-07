@@ -10,6 +10,17 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class BuiltinToolContractTest {
+    @Test fun nodeOperationsExposeAndBoundOptionalSnapshots() {
+        for (operation in listOf("viewNode", "viewClick", "viewScroll")) {
+            val schema = BuiltinToolSchemas.inspection(operation)
+            val args = JSONObject().put("path", "window0/1").put("snapshotId", "snapshot").put("includeSnapshot", false)
+            ToolArguments.validate(schema, args)
+            for (limit in listOf(0, 101)) assertThrows(IllegalArgumentException::class.java) {
+                ToolArguments.validate(schema, JSONObject(args.toString()).put("snapshotLimit", limit))
+            }
+            ToolArguments.validate(schema, args.put("snapshotLimit", 3))
+        }
+    }
     @Test fun arraySchemasAndPhoneGesturesExposeTheirRealElementTypes() {
         val phone = BuiltinToolSchemas.phone(JSONObject(java.io.File("src/main/assets/phone-use.input.schema.json").readText()))
         val fields = phone.getJSONObject("properties")
@@ -59,7 +70,7 @@ class BuiltinToolContractTest {
     }
 
     @Test fun ubuntuCommandDeadlineIsAdvertisedAndRejectedAtTheBoundary() {
-        val schema = BuiltinToolSchemas.create("run_linux", mapOf("command" to "string", "timeoutSeconds" to "integer"), listOf("command"))
+        val schema = BuiltinToolSchemas.create("run_linux", mapOf("command" to "string", "timeoutSeconds" to "integer", "waitSeconds" to "integer"), listOf("command"))
         ToolArguments.validate(schema, JSONObject().put("command", "python3 script.py").put("timeoutSeconds", 600))
         val error = runCatching { ToolArguments.validate(schema, JSONObject().put("command", "python3 script.py").put("timeoutSeconds", 0)) }.exceptionOrNull()!!
         assertTrue(error.message!!.contains("timeoutSeconds"))

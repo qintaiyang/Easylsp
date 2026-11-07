@@ -5,6 +5,31 @@ import org.json.JSONObject
 
 /** Parameter contracts advertised by both built-in catalogs at the MCP boundary. */
 object BuiltinToolSchemas {
+    fun analysis(action: String): JSONObject {
+        val fields = when (action) {
+            "info", "manifest" -> emptyMap()
+            "classes", "strings", "resources" -> mapOf("query" to "string")
+            "methods", "fields" -> mapOf("query" to "string", "owner" to "string")
+            "references" -> mapOf("target" to "string")
+            "java", "smali" -> mapOf("className" to "string", "signature" to "string", "source" to "string")
+            "resource" -> mapOf("apk" to "string", "entry" to "string")
+            else -> error("未知分析操作 " + action)
+        }
+        val required = when (action) { "java" -> listOf("className"); "smali" -> listOf("className", "signature"); "references" -> listOf("target"); "resource" -> listOf("apk", "entry"); else -> emptyList() }
+        return create("analysis_" + action, fields + mapOf("offset" to "integer", "limit" to "integer"), required)
+    }
+    fun inspection(operation: String): JSONObject {
+        val fields = when (operation) {
+            "viewTree" -> mapOf("query" to "string", "offset" to "integer", "limit" to "integer")
+            "viewNode" -> mapOf("path" to "string", "snapshotId" to "string", "relation" to "string", "includeSnapshot" to "boolean", "snapshotLimit" to "integer")
+            "viewClick" -> mapOf("path" to "string", "snapshotId" to "string", "includeSnapshot" to "boolean", "snapshotLimit" to "integer")
+            "viewScroll" -> mapOf("path" to "string", "snapshotId" to "string", "forward" to "boolean", "includeSnapshot" to "boolean", "snapshotLimit" to "integer")
+            "inspectOverlay" -> mapOf("enabled" to "boolean", "x" to "integer", "y" to "integer")
+            "creationStacks", "performanceOverlay" -> mapOf("enabled" to "boolean")
+            else -> emptyMap()
+        }
+        return create(operation, fields, when(operation) { "viewNode", "viewClick", "viewScroll" -> listOf("path", "snapshotId"); "creationStacks" -> listOf("enabled"); else -> emptyList() })
+    }
     fun create(name: String, fields: Map<String, String>, required: List<String>): JSONObject {
         val properties = JSONObject().apply { fields.forEach { (key, type) -> put(key, JSONObject().put("type", type)) } }
         fields.filterValues { it == "array" }.keys.forEach { key ->
@@ -18,6 +43,21 @@ object BuiltinToolSchemas {
             }
             properties.getJSONObject(key).put("items", item)
         }
+        if (name == "analysis_query" || name == "inspect_target") {
+            val operations = if (name == "analysis_query") listOf("info", "classes", "methods", "fields", "strings", "references", "java", "smali", "manifest", "resources", "resource")
+                else listOf("viewTree", "viewNode", "viewClick", "viewScroll", "creationStacks", "inspectOverlay", "performanceStart", "performanceRead", "performanceStop", "performanceOverlay", "memory")
+            val key = if (name == "analysis_query") "action" else "operation"
+            properties.getJSONObject(key).put("enum", JSONArray(operations))
+            properties.getJSONObject("arguments").put("anyOf", JSONArray(operations.map { op -> (if (name == "analysis_query") analysis(op) else inspection(op)).put("title", op) }))
+            properties.getJSONObject("arguments").put("description", operations.joinToString("; ") { op -> op + ": " + (if (name == "analysis_query") analysis(op) else inspection(op)).toString() })
+        }
+        if (name == "viewTree") { rangeView(properties) }
+        if (name in setOf("viewNode", "viewClick", "viewScroll")) {
+            properties.getJSONObject("snapshotLimit").put("minimum", 1).put("maximum", 100).put("description", "可选快照节点上限，默认 10；截断时返回 snapshotTruncated")
+            properties.getJSONObject("includeSnapshot").put("description", "默认只返回 node 摘要；viewNode relation=children 默认含直接子节点快照。true 返回有界快照。")
+            if (name == "viewNode") properties.getJSONObject("relation").put("enum", JSONArray(listOf("self", "parent", "children", "ancestors")))
+        }
+        if (name == "read_tool_output") properties.getJSONObject("offset").put("description", "UTF-16 code units；使用原结果引用返回的 nextOffset。field 为点分字段路径；equals 为数组行字段的精确匹配。")
         if (name == "update_skill") properties.getJSONObject("files").put("additionalProperties", JSONObject().put("type", "string"))
         fun range(key: String, minimum: Int, maximum: Int, description: String) {
             properties.getJSONObject(key).put("minimum", minimum).put("maximum", maximum).put("description", description)
@@ -33,7 +73,7 @@ object BuiltinToolSchemas {
             range("limit", 1, maximum, "每页数量（单位：$pageUnit），1..$maximum")
             properties.getJSONObject("offset").put("minimum", 0).put("description", "从 0 开始的$pageUnit 偏移；下一页使用返回的 nextOffset")
         }
-        if (name == "run_command" || name == "read_execution") {
+        if (name == "run_command" || name == "run_linux" || name == "read_execution") {
             range("waitSeconds", 1, 60, "等待本次执行的秒数，1..60；等待结束后仍可用 read_execution 查询同一 executionId")
         }
         if (name == "run_command" || name == "run_linux") {
@@ -53,11 +93,24 @@ object BuiltinToolSchemas {
             properties.getJSONObject("addressKind").put("enum", JSONArray(listOf("ELF_VADDR", "TOMBSTONE_RELATIVE_PC", "FILE_OFFSET", "RUNTIME_PC")))
         }
         if (name == "create_plugin") properties.getJSONObject("runtime").put("enum", JSONArray(listOf("BEANSHELL", "NATIVE")))
+        if (name == "get_native_plugin_status") {
+            properties.getJSONObject("scope").put("enum", JSONArray(listOf("current", "history")))
+            range("limit", 1, 50, "每页实例数，默认 10；逐条来源通过 evidenceRead 读取")
+            properties.getJSONObject("cursor").put("minimum", 0)
+        }
+        if (name == "get_plugin_coverage") {
+            range("limit", 1, 50, "每页插件数，默认 10；历史 Native 实例使用 get_native_plugin_status(scope=history)")
+            properties.getJSONObject("cursor").put("minimum", 0)
+        }
         if (name == "enable_native_plugin") properties.getJSONObject("policy").put("enum", JSONArray(listOf("NATIVE_ONLY", "NATIVE_AND_JAVA")))
         return JSONObject().put("type", "object").put("additionalProperties", false)
             .put("properties", properties).put("required", JSONArray(required))
     }
 
+    private fun rangeView(properties: JSONObject) {
+        properties.getJSONObject("limit").put("minimum", 1).put("maximum", 100).put("description", "View 节点数，1..100；不支持 maxDepth/maxNodes")
+        properties.getJSONObject("offset").put("minimum", 0)
+    }
     /** Flat object schemas work across model adapters; the controller enforces action-specific requirements. */
     fun phone(canonical: JSONObject): JSONObject {
         fun expand(source: JSONObject): JSONObject {

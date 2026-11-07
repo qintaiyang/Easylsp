@@ -25,13 +25,16 @@ class AnalysisEngine(private val xmlSecurity: IJadxSecurity = AndroidJadxSecurit
     private var apks = emptyList<File>()
     private var sources = emptyList<DexSource>()
     private var classes: List<IndexedClass>? = null
+    private val textCache = object : LinkedHashMap<List<String>, String>(16, .75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<List<String>, String>) = size > 16
+    }
     private var decompiler: JadxDecompiler? = null
     private var javaInput: File? = null
     private var loadMillis = 0L
     private var sampledPeakHeapBytes = 0L
     private fun sampleHeap() { val runtime = Runtime.getRuntime(); sampledPeakHeapBytes = maxOf(sampledPeakHeapBytes, runtime.totalMemory() - runtime.freeMemory()) }
     private val xmlRoot by lazy { jadx.core.dex.nodes.RootNode(JadxArgs().apply { security = xmlSecurity }) }
-    private fun clear() { releaseJava(); classes = null; sources = emptyList(); apks = emptyList(); sample = null; loadMillis = 0; sampledPeakHeapBytes = 0 }
+    private fun clear() { releaseJava(); textCache.clear(); classes = null; sources = emptyList(); apks = emptyList(); sample = null; loadMillis = 0; sampledPeakHeapBytes = 0 }
     private fun load(next: SampleEntity) {
         if (sample?.projectId == next.projectId && sample?.revision == next.revision) return
         clear()
@@ -139,7 +142,8 @@ class AnalysisEngine(private val xmlSecurity: IJadxSecurity = AndroidJadxSecurit
             "java", "smali" -> {
                 val className = args.getString("className")
                 val indexed = index(progress).firstOrNull { it.type == DexSignatures.owner(className) && (args.optString("source").isBlank() || it.source == args.getString("source")) } ?: error("样本中未找到类 $className")
-                val code = try { if (action == "java") {
+                val key = listOf(next.projectId, next.revision.toString(), indexed.source, className, args.optString("signature"), action)
+                val code = textCache[key] ?: (try { if (action == "java") {
                     val java = jadx(indexed.dex, progress).searchJavaClassByOrigFullName(DexSignatures.type(indexed.type)) ?: error("JADX 未加载该类，请打开 Smali")
                     progress("还原 ${java.fullName}")
                     runInterruptible {
@@ -163,7 +167,7 @@ class AnalysisEngine(private val xmlSecurity: IJadxSecurity = AndroidJadxSecurit
                         lines.subList(start, end + 1).joinToString("\n")
                     }
                 }
-                } finally { sampleHeap(); releaseJava() }
+                } finally { sampleHeap(); releaseJava() }).also { textCache[key] = it }
                 require(code.isNotBlank()) { "JADX 未生成此类或方法的独立 Java 代码，请打开同一目标的 Smali" }
                 return textPage(code, offset, limit).put("source", indexed.source).put("className", className).put("format", action).put("partial", action == "java" && (code.contains("JADX ERROR") || code.contains("Method not decompiled"))).withSample(next)
             }

@@ -53,6 +53,7 @@ public class PluginEngineTest {
         public void state(String id, long revision, String instance, String state, String error) { states.add(state + ":" + revision); }
         public void log(String id, long revision, String instance, String level, String message, Throwable error) { logs.add(level + ":" + message); }
     });
+    @After public void cleanup() { engine.close(); }
     private String script(String mode, String body) {
         return "void onLoad() { hook." + mode + "(\"" + Calculator.class.getName() + "\", \"add\", new String[] {\"int\",\"int\"}, new HookCallback() { public void call(HookParam p) { " + body + " } }); } void onUnload() { plugin.log(\"unloaded\"); }";
     }

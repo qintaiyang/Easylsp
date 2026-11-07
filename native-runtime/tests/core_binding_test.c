@@ -1,3 +1,4 @@
+#define EASYLSP_CORE_PROFILE 1
 /* Runs real module matching/registration code; the Hook backend is a test double. */
 #include "../src/main/cpp/native_plugin.c"
 #include <assert.h>
@@ -30,5 +31,10 @@ int main(int argc, char **argv) {
     unhook_result = 0;
     cleanup_failed_instance(NULL, 0, &plugin);
     assert(!hook->stub && original == retained);
+    uint64_t before = profile_build_reads;
+    struct dl_phdr_info cached = {.dlpi_phdr = module_ids[0].phdr, .dlpi_addr = module_ids[0].bias};
+    char build[129]; module_build_id(&cached, build); module_build_id(&cached, build);
+    assert(profile_build_reads == before);
+    printf("module sample: note parses=%" PRIu64 " selector scans=%" PRIu64 " symbol reads=%" PRIu64 "; repeated Build ID reads added zero parses\n", profile_build_reads, profile_selector_scans, profile_symbol_reads);
     puts("Build ID rejected candidate stays waiting; later matching module binds; failed-init storage retained");
 }

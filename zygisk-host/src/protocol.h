@@ -7,8 +7,8 @@
 extern "C" {
 #endif
 #define EH_PROTOCOL 1
-#define EH_VERSION "0.9-dev1"
-#define EH_RUNTIME "0.9-dev1-engine2.0.1-m7"
+#define EH_VERSION "0.91"
+#define EH_RUNTIME "0.91-engine2.0.1-m7"
 #define EH_DATA "/data/adb/easylsp"
 #define EH_MODULE "easylsp_native_host"
 #define EH_MAX_PLUGINS 16

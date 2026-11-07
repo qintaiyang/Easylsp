@@ -6,6 +6,15 @@ import org.json.JSONObject
 
 /** Rebuildable Room display projection. This class never invokes models or tools. */
 class HarnessProjection(private val store: ProjectStore) {
+    companion object {
+        fun originalToolResult(run: ToolRunEntity, event: JSONObject, time: Long): ToolRunEntity {
+            if (event.optJSONObject("surfaceOp")?.optString("op") == "replace" || (run.finishedAt != null && run.status != "UNKNOWN")) return run
+            val message = event.getJSONObject("data").getJSONObject("message")
+            val content = message.getJSONArray("content")
+            val result = (0 until content.length()).map { content.getJSONObject(it) }.filter { it.getString("type") == "text" }.joinToString("\n") { it.getString("text") }
+            return run.copy(result = result, status = if (message.optBoolean("isError")) "ERROR" else "COMPLETE", finishedAt = time)
+        }
+    }
     private val dao = store.workflows
     private fun responseKey(sessionId: String, turnId: String, step: Int, seq: Long) =
         "assistant:$turnId:$step:${dao.precedingResponses(sessionId, turnId, step, seq) + 1}"
@@ -106,10 +115,10 @@ class HarnessProjection(private val store: ProjectStore) {
                 val message = data.getJSONObject("message")
                 val id = "${session.sessionId}:${message.getString("toolCallId")}"
                 val run = requireNotNull(dao.toolRun(id))
-                val content = message.getJSONArray("content")
-                val result = (0 until content.length()).map { content.getJSONObject(it) }.filter { it.getString("type") == "text" }.joinToString("\n") { it.getString("text") }
-                dao.saveToolRun(run.copy(result = result, status = if (message.optBoolean("isError")) "ERROR" else "COMPLETE", finishedAt = time))
-                if (run.name == "update_plan" && !message.optBoolean("isError")) {
+                val next = originalToolResult(run, event, time)
+                val originalResult = next !== run
+                if (originalResult) dao.saveToolRun(next)
+                if (originalResult && run.name == "update_plan" && !message.optBoolean("isError")) {
                     val items = JSONObject(run.arguments).getJSONArray("items")
                     dao.clearPlan(conversationId)
                     for (i in 0 until items.length()) {

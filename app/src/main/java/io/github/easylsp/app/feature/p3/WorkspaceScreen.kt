@@ -106,8 +106,8 @@ import java.io.File
                 }
             }
             "APK" -> {
-                Text("将已保存插件嵌入独立 Xposed 模块，同一插件使用固定包名和本机签名。目标不依赖管理端；请在框架启用新模块后重启目标。", fontSize = 12.sp)
-                plugins.filter { it.projectId == project.id }.forEach { plugin -> TextButton(onClick = { vm.action { apk = graph.apkExporter.export(plugin.id); "已生成 ${apk!!.name}" } }) { Text("生成 ${plugin.name} r${plugin.revision}") } }
+                Text("将已保存插件嵌入独立 Xposed 模块，同一插件使用固定包名和本机签名。包含单个 Java 插件及 DEX/APK 库，不包含联合发行。更新时覆盖安装同一包名；启用独立模块前先停用此处插件，然后重启目标以免双重 Hook。", fontSize = 12.sp)
+                plugins.filter { it.projectId == project.id && it.runtime == "BEANSHELL" && (it.releaseManifest == "{}" || !it.releaseManifest.contains("JAVA_NATIVE")) && io.github.easylsp.app.data.ReleaseDependencies.installedOrder(it, plugins.filter { row -> row.projectId == project.id }).size == 1 }.forEach { plugin -> TextButton(onClick = { vm.action { apk = graph.apkExporter.export(plugin.id); "已生成 ${apk!!.name}" } }) { Text("生成 ${plugin.name} r${plugin.revision}") } }
                 apk?.let { file ->
                     Text(file.name)
                     Row {

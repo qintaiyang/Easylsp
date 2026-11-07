@@ -15,6 +15,20 @@ import org.junit.Test
 import org.junit.Assert.*
 
 class HarnessToolBridgeTest {
+    @Test fun runtimeErrorsPreserveStableCodeAcrossMcp() = runBlocking {
+        val tool = ToolDefinition("stale", "fixture", JSONObject("""{"type":"object","properties":{}}"""), invoke = {
+            throw io.github.easylsp.api.internal.OperationException("STALE_SNAPSHOT", "请重新读取 viewTree")
+        })
+        HarnessToolBridge(listOf(tool)).use { bridge ->
+            McpClient(McpServerEntity("local", "local", bridge.url), bridge.token).use { client ->
+                client.initialize()
+                val result = client.call("stale", JSONObject())
+                assertTrue(result.getBoolean("isError"))
+                assertEquals("STALE_SNAPSHOT", result.getJSONObject("structuredContent").getJSONObject("error").getString("code"))
+                assertEquals("请重新读取 viewTree", result.getJSONObject("structuredContent").getJSONObject("error").getString("message"))
+            }
+        }
+    }
     @Test fun closeWaitsForInFlightToolCleanup() = runBlocking {
         val started = CompletableDeferred<Unit>()
         val cancelling = CompletableDeferred<Unit>()
