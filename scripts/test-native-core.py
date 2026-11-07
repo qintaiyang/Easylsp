@@ -19,6 +19,14 @@ with tempfile.TemporaryDirectory() as directory:
     subprocess.run(['cc', '-std=c17', '-Wall', '-Wextra', '-Werror', '-I' + str(repo / 'native-runtime/tests/stubs'), str(repo / 'native-runtime/tests/core_binding_test.c'), '-ldl', '-pthread', '-o', str(test)], check=True)
     subprocess.run([str(test), *libraries], check=True)
 
+    plugin_source = directory / 'plugin.c'
+    plugin_source.write_text('int easylsp_plugin_init_v1(const void *host, const void *context) { (void)host; (void)context; return 0; }\n')
+    plugin = directory / 'plugin.so'
+    subprocess.run(['cc', '-shared', '-fPIC', str(plugin_source), '-o', str(plugin)], check=True)
+    test = directory / 'load-test'
+    subprocess.run(['cc', '-std=c17', '-Wall', '-Wextra', '-Werror', '-I' + str(repo / 'native-runtime/tests/stubs'), str(repo / 'native-runtime/tests/core_load_test.c'), '-ldl', '-pthread', '-o', str(test)], check=True)
+    subprocess.run([str(test), libraries[0], str(plugin)], check=True)
+
     callee = directory / 'libm7callee.so'
     caller = directory / 'libm7caller.so'
     subprocess.run(['cc','-shared','-fPIC',str(repo/'native-entry/tests/callee.c'),'-Wl,-soname,libm7callee.so','-o',str(callee)],check=True)

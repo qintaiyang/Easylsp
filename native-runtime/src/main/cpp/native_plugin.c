@@ -204,16 +204,24 @@ static int load_plugin(const sh_core_plugin_v1 *request) {
     p->context = (sh_plugin_context_v1){ EASYLSP_NATIVE_ABI_V1, sizeof(sh_plugin_context_v1),
         p->plugin_id, p->build_id, p->instance_id, p->package_name, p->process_name, p->generation,
         request->source_revision, start_ticks(), getuid(), getpid(), p->config, p };
-    instances[instance_count] = p;
-    atomic_fetch_add(&instance_count, 1);
-    atomic_store(&p->active, 1);
     event(p, 0, "plugin_loading", 0, "remote FD; RTLD_LOCAL");
     android_dlextinfo extension = { .flags = ANDROID_DLEXT_USE_LIBRARY_FD, .library_fd = request->fd };
     char name[160]; snprintf(name, sizeof(name), "easylsp-%s-%s.so", p->plugin_id, p->build_id);
     p->library = android_dlopen_ext(name, RTLD_NOW | RTLD_LOCAL, &extension);
-    if (!p->library) { atomic_store(&p->active, 0); event(p, 0, "plugin_load_failed", SH_LOAD_FAILED, dlerror()); return SH_LOAD_FAILED; }
+    if (!p->library) {
+        event(p, 0, "plugin_load_failed", SH_LOAD_FAILED, dlerror());
+        free(p); return SH_LOAD_FAILED;
+    }
     sh_plugin_init_v1 init = (sh_plugin_init_v1)dlsym(p->library, "easylsp_plugin_init_v1");
-    if (!init) { atomic_store(&p->active, 0); event(p, 0, "plugin_load_failed", SH_ENTRY_MISSING, dlerror()); return SH_ENTRY_MISSING; }
+    if (!init) {
+        event(p, 0, "plugin_load_failed", SH_ENTRY_MISSING, dlerror());
+        /* Constructors may have started work; retain the mapping, but no context
+         * or callbacks have been published, so the instance can be discarded. */
+        free(p); return SH_ENTRY_MISSING;
+    }
+    atomic_store(&p->active, 1);
+    instances[instance_count] = p;
+    atomic_fetch_add(&instance_count, 1);
     p->registering = 1; registration_owner = p;
     result = init(&host, &p->context);
     registration_owner = NULL; p->registering = 0;

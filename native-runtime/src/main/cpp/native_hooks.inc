@@ -255,7 +255,7 @@ static void process_module(struct dl_phdr_info *info, uint32_t phase) {
         for (unsigned j = 0; j < p->subscription_count; j++) notify_subscription(p, &p->subscriptions[j], info, phase);
         if (phase == SH_MODULE_BEFORE_UNLOAD) for (unsigned j = 0; j < p->hook_count; j++) {
             struct hook *h = &p->hooks[j];
-            if (h->load_id && h->load_bias == info->dlpi_addr) {
+            if (!h->cancelled && h->load_id && h->load_bias == info->dlpi_addr) {
                 int code = detach_hook(h);
                 event(p, h->id, "hook_unbound", code, info->dlpi_name);
                 h->stub = NULL; h->address = 0; h->load_id = 0; if (h->original) *h->original = NULL;

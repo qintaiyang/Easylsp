@@ -35,6 +35,13 @@ int main(int argc, char **argv) {
     struct dl_phdr_info cached = {.dlpi_phdr = module_ids[0].phdr, .dlpi_addr = module_ids[0].bias};
     char build[129]; module_build_id(&cached, build); module_build_id(&cached, build);
     assert(profile_build_reads == before);
+    atomic_store(&plugin.active, 1);
+    assert(remove_hook(&plugin, id) == SH_OK);
+    struct dl_phdr_info unloaded = {.dlpi_addr = hook->load_bias, .dlpi_name = "libcandidate.so"};
+    process_module(&unloaded, SH_MODULE_BEFORE_UNLOAD);
+    assert(hook->cancelled && atomic_load(&hook->state) == SH_CANCELLED);
+    assert(original == retained);
     printf("module sample: note parses=%" PRIu64 " selector scans=%" PRIu64 " symbol reads=%" PRIu64 "; repeated Build ID reads added zero parses\n", profile_build_reads, profile_selector_scans, profile_symbol_reads);
     puts("Build ID rejected candidate stays waiting; later matching module binds; failed-init storage retained");
+    puts("Cancelled hooks remain cancelled after module unload; original storage retained");
 }
