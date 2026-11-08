@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 import zipfile
 
-CAPABILITIES = {'native.symbol', 'native.elf-vaddr', 'native.module-lifecycle', 'native.chain', 'native.jni-register', 'native.intercept', 'native.plt', 'native.runtime-register', 'java.beanshell', 'release.joint', 'release.dependencies'}
+CAPABILITIES = {'native.symbol', 'native.elf-vaddr', 'native.module-lifecycle', 'native.chain', 'native.jni-register', 'native.intercept', 'native.plt', 'native.runtime-register', 'java.beanshell', 'java.components', 'java.services', 'release.joint', 'release.dependencies'}
 
 
 def identifier(value):
@@ -48,7 +48,7 @@ def read_release(path):
     for key in ('name', 'versionName', 'license', 'sdkVersion', 'channel', 'publishedAt'):
         if not isinstance(manifest[key], str) or not manifest[key].strip():
             raise ValueError(f'missing {key}')
-    if type(manifest['minHostVersion']) is not int or not 1 <= manifest['minHostVersion'] <= 9:
+    if type(manifest['minHostVersion']) is not int or not 1 <= manifest['minHostVersion'] <= 10:
         raise ValueError('unsupported minimum host version')
     target = manifest['target']
     if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+', target['packageName']) or target['processScope'] not in ('main', 'children', 'all', 'exact'):
@@ -90,7 +90,7 @@ def read_release(path):
         identities.add(identity)
     common = {'manifest.json', 'README.md', 'LICENSE', 'config.schema.json'}
     for name, data in files.items():
-        allowed = name in common or (native and (name == 'native/arm64-v8a/plugin.so' or name.startswith(('src/', 'include/')))) or (java and (name == 'java/main.java' or name.startswith('java/lib/')))
+        allowed = name in common or (native and (name == 'native/arm64-v8a/plugin.so' or name.startswith(('src/', 'include/')))) or (java and name.startswith('java/'))
         if not allowed:
             raise ValueError(f'undeclared payload: {name}')
         if name != 'native/arm64-v8a/plugin.so':
@@ -98,6 +98,47 @@ def read_release(path):
                 if b'\0' in data:
                     raise ValueError(f'binary in text file: {name}')
                 data.decode('utf-8')
+    java_text = [name for name in files if name.startswith('java/') and not name.startswith('java/lib/')]
+    if any(name == 'java/lib' or name == 'java/info.prop' or name.startswith('java/info.prop/') for name in java_text):
+        raise ValueError('reserved Java program path')
+    if any(name != 'java/main.java' for name in java_text):
+        if manifest['minHostVersion'] < 10 or 'java.components' not in manifest['requiredCapabilities']:
+            raise ValueError('component program requires host 10 and java.components')
+    if 'java/plugin.json' in files:
+        program = json.loads(files['java/plugin.json'])
+        if program.get('schema') != 1:
+            raise ValueError('unsupported plugin.json schema')
+        components = {}
+        paths = set()
+        for component in program.get('components', []):
+            cid, path = component['id'], component['path']
+            if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_.-]*', cid) or cid in components or path in paths or not path.startswith('src/') or not path.endswith('.bsh') or 'java/' + path not in files:
+                raise ValueError('invalid or missing component source')
+            components[cid] = component
+            paths.add(path)
+        done, visiting = set(), set()
+        def visit(cid):
+            if cid in done:
+                return
+            if cid not in components or cid in visiting:
+                raise ValueError('missing or cyclic component dependency')
+            visiting.add(cid)
+            for dependency in components[cid].get('requires', []):
+                visit(dependency)
+            visiting.remove(cid)
+            done.add(cid)
+        for cid in components:
+            visit(cid)
+        services = program.get('services', {})
+        provides, requires = services.get('provides', {}), services.get('requires', {})
+        if provides or requires:
+            if 'java.services' not in manifest['requiredCapabilities']:
+                raise ValueError('services require java.services')
+            for name, version in list(provides.items()) + list(requires.items()):
+                if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_.-]*', name) or type(version) is not int or version < 1:
+                    raise ValueError('invalid service declaration')
+            if set(provides) & set(requires):
+                raise ValueError('service depends on itself')
     if 'config' in manifest:
         if not native:
             raise ValueError('Java configuration is not implemented')

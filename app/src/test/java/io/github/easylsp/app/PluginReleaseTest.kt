@@ -21,12 +21,29 @@ class PluginReleaseTest {
             entries.forEach { (path, text) -> zip.putNextEntry(ZipEntry(path)); zip.write(text.toByteArray()); zip.closeEntry() }
         }
     }.toByteArray()
+    @Test fun multiFileReleaseRequiresCapabilitiesAndPreservesSources() {
+        val m = manifest().put("minHostVersion", 10)
+        m.getJSONArray("requiredCapabilities").put("java.components").put("java.services")
+        val files = linkedMapOf("manifest.json" to m.toString(), "README.md" to "fixture", "LICENSE" to "MIT", "java/main.java" to "",
+            "java/plugin.json" to """{"schema":1,"components":[{"id":"echo","path":"src/echo.bsh"}],"services":{"provides":{"example.echo":1}}}""",
+            "java/src/echo.bsh" to "return this;", "java/assets/data.txt" to "payload")
+        fun bytes() = files.mapValues { it.value.toByteArray() }
+        PluginRelease.validateFiles(bytes())
+        files.remove("java/src/echo.bsh")
+        assertThrows(IllegalArgumentException::class.java) { PluginRelease.validateFiles(bytes()) }
+        files["java/src/echo.bsh"] = "return this;"
+        files["java/info.prop"] = "reserved"
+        assertThrows(IllegalArgumentException::class.java) { PluginRelease.validateFiles(bytes()) }
+        files.remove("java/info.prop")
+        files["manifest.json"] = m.put("minHostVersion", 9).toString()
+        assertThrows(IllegalArgumentException::class.java) { PluginRelease.validateFiles(bytes()) }
+    }
     @Test fun offlineJavaReleaseAndInputBoundaries() {
         assertTrue("java/main.java" in PluginArchive.read(archive(manifest()).inputStream()))
         assertThrows(IllegalArgumentException::class.java) { PluginArchive.read(archive(manifest().put("requiredCapabilities", org.json.JSONArray().put("native.unsupported-future"))).inputStream()) }
         assertThrows(IllegalArgumentException::class.java) { PluginArchive.read(archive(manifest(), "../escape").inputStream()) }
         assertThrows(IllegalArgumentException::class.java) { PluginArchive.read(archive(manifest(), "install.sh").inputStream()) }
-        assertThrows(IllegalArgumentException::class.java) { PluginRelease.read(manifest().put("minHostVersion", 10).toString().toByteArray()) }
+        assertThrows(IllegalArgumentException::class.java) { PluginRelease.read(manifest().put("minHostVersion", 11).toString().toByteArray()) }
     }
     @Test fun platformCompatibilityPreservesHistoricalReleases() {
         val old = PluginRelease.read(manifest().toString().toByteArray())

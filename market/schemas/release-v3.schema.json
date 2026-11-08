@@ -91,7 +91,7 @@
     "minHostVersion": {
       "type": "integer",
       "minimum": 1,
-      "maximum": 9
+      "maximum": 10
     },
     "requiredCapabilities": {
       "type": "array",
@@ -108,7 +108,9 @@
           "native.runtime-register",
           "java.beanshell",
           "release.joint",
-          "release.dependencies"
+          "release.dependencies",
+          "java.components",
+          "java.services"
         ]
       }
     },

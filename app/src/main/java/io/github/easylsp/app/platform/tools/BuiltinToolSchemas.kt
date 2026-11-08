@@ -58,7 +58,9 @@ object BuiltinToolSchemas {
             if (name == "viewNode") properties.getJSONObject("relation").put("enum", JSONArray(listOf("self", "parent", "children", "ancestors")))
         }
         if (name == "read_tool_output") properties.getJSONObject("offset").put("description", "UTF-16 code units；使用原结果引用返回的 nextOffset。field 为点分字段路径；equals 为数组行字段的精确匹配。")
-        if (name == "update_skill") properties.getJSONObject("files").put("additionalProperties", JSONObject().put("type", "string"))
+        if (name in setOf("update_skill", "write_plugin_files", "validate_plugin")) {
+            if (properties.has("files")) properties.getJSONObject("files").put("additionalProperties", JSONObject().put("type", "string"))
+        }
         fun range(key: String, minimum: Int, maximum: Int, description: String) {
             properties.getJSONObject(key).put("minimum", minimum).put("maximum", maximum).put("description", description)
         }

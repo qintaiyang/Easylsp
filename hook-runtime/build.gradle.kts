@@ -2,7 +2,7 @@ plugins { alias(libs.plugins.android.library) }
 android {
     namespace = "io.github.easylsp.runtime"
     compileSdk = 35
-    defaultConfig { minSdk = 31 }
+    defaultConfig { minSdk = 31; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     testOptions {
         unitTests.all { it.systemProperty("easylsp.examples", rootProject.file("examples/plugins").absolutePath) }
@@ -17,4 +17,6 @@ dependencies {
     testImplementation(libs.libxposed)
     testImplementation(libs.junit)
     testImplementation(libs.json)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.junit)
 }

@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "components": [
+    {
+      "id": "greeting",
+      "path": "src/greeting.bsh"
+    }
+  ]
+}

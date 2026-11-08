@@ -15,8 +15,8 @@ android {
         applicationId = "io.github.easylsp"
         minSdk = 31
         targetSdk = 35
-        versionCode = 914
-        versionName = "0.9.4"
+        versionCode = 915
+        versionName = "0.9.5"
         ndk { abiFilters += "arm64-v8a" }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         javaCompileOptions { annotationProcessorOptions { arguments["room.schemaLocation"] = "$projectDir/schemas" } }

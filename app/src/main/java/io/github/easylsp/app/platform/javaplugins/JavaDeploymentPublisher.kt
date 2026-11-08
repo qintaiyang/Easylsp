@@ -31,11 +31,15 @@ class JavaDeploymentPublisher(private val graph: EasylspApp) {
         val project = requireNotNull(graph.store.dao.project(projectId))
         require(project.kind == "INSTALLED") { "Java 发布需要已安装目标" }
         val installed = graph.store.dao.plugins(projectId)
-        val ordered = enabled.flatMap { ReleaseDependencies.installedOrder(it, installed) }.filter { it.runtime == "BEANSHELL" }.distinctBy { it.id }
+        val selected = enabled.flatMap { ReleaseDependencies.installedOrder(it, installed) }.filter { it.runtime == "BEANSHELL" }.distinctBy { it.id }
         val generation = UUID.randomUUID().toString()
         val saved = File(directory, projectId + ".json")
         val previousSnapshot = if (saved.exists()) JSONObject(saved.readText()) else null
         val previous = previousSnapshot?.getJSONArray("plugins") ?: JSONArray()
+        val ordered = graph.store.javaOrder(selected.map { plugin ->
+            val pinned = (0 until previous.length()).map { previous.getJSONObject(it) }.firstOrNull { it.getString("pluginId") == plugin.id }
+            if (pinned != null && !refresh) plugin.copy(revision = pinned.getLong("revision")) else plugin
+        })
         val app = if (ordered.isEmpty() && previousSnapshot != null) null else requireNotNull(graph.targetApplications.info(project.packageName, project.userId).applicationInfo)
         val uid = app?.uid ?: previousSnapshot!!.getInt("uid")
         val apkPath = app?.sourceDir ?: previousSnapshot!!.getString("targetApkPath")
@@ -46,19 +50,19 @@ class JavaDeploymentPublisher(private val graph: EasylspApp) {
                 items.put(JSONObject(pinned.toString()).put("processScope", plugin.processScope).put("processName", plugin.processName.ifEmpty { project.packageName }))
                 continue
             }
-            graph.store.sourceFile(plugin).reader().use { io.github.easylsp.runtime.PluginEngine.readAndParse(it) }
-            val script = "java-" + UUID.randomUUID() + ".java"
-            graph.framework.writeNativeArtifact(script, graph.store.sourceFile(plugin))
+            val script = "java-" + UUID.randomUUID() + ".zip"
+            val program = graph.store.programFile(plugin)
+            try { graph.framework.writeNativeArtifact(script, program) } finally { program.delete() }
             val libraries = JSONArray()
             graph.store.libraries(plugin).forEach { file ->
                 val remote = "java-" + UUID.randomUUID() + "." + file.extension
                 graph.framework.writeNativeArtifact(remote, file)
                 libraries.put(JSONObject().put("name", file.name).put("remoteFile", remote))
             }
-            items.put(JSONObject().put("pluginId", plugin.id).put("revision", plugin.revision).put("remoteFile", script)
+            items.put(JSONObject().put("pluginId", plugin.id).put("revision", plugin.revision).put("remoteFile", script).put("programFormat", io.github.easylsp.runtime.PluginProgram.FORMAT)
                 .put("processScope", plugin.processScope).put("processName", plugin.processName.ifEmpty { project.packageName }).put("libraries", libraries))
         }
-        val snapshot = JSONObject().put("schema", 1).put("generation", generation).put("uid", uid).put("packageName", project.packageName)
+        val snapshot = JSONObject().put("schema", 2).put("generation", generation).put("uid", uid).put("packageName", project.packageName)
             .put("targetApkPath", apkPath).put("plugins", items).put("publishedAt", System.currentTimeMillis())
         graph.framework.publishJavaSnapshot(uid.toString() + ":" + project.packageName, snapshot)
         saved.parentFile!!.mkdirs()

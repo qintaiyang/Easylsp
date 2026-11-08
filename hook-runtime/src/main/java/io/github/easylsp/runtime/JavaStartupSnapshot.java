@@ -21,7 +21,7 @@ final class JavaStartupSnapshot {
     boolean published() { return snapshot != null; }
     void load(Application app, PluginEngine engine) throws Exception {
         if (snapshot == null) return;
-        if (snapshot.getInt("schema") != 1 || snapshot.getInt("uid") != android.os.Process.myUid()
+        if ((snapshot.getInt("schema") != 1 && snapshot.getInt("schema") != 2) || snapshot.getInt("uid") != android.os.Process.myUid()
                 || !snapshot.getString("packageName").equals(app.getPackageName())
                 || !snapshot.getString("targetApkPath").equals(app.getApplicationInfo().sourceDir))
             throw new IllegalArgumentException("Java 发布目标已变化，请重新发布");
@@ -45,8 +45,11 @@ final class JavaStartupSnapshot {
                     }
                 }
                 ClassLoader loader = buffers.isEmpty() ? app.getClassLoader() : new dalvik.system.InMemoryDexClassLoader(buffers.toArray(new ByteBuffer[0]), app.getClassLoader());
-                try (Reader reader = new InputStreamReader(new ParcelFileDescriptor.AutoCloseInputStream(files.open(item.getString("remoteFile"))), StandardCharsets.UTF_8)) {
-                    engine.load(id, revision, reader, loader);
+                try (InputStream input = new ParcelFileDescriptor.AutoCloseInputStream(files.open(item.getString("remoteFile")))) {
+                    String format = item.optString("programFormat", "script-v1");
+                    if (PluginProgram.FORMAT.equals(format)) engine.load(id, revision, PluginProgram.read(input), loader);
+                    else if ("script-v1".equals(format)) engine.load(id, revision, new InputStreamReader(input, StandardCharsets.UTF_8), loader);
+                    else throw new IllegalArgumentException("Unsupported Java program format: " + format);
                 }
                 android.util.Log.i("Easylsp", "Java published instance: " + id + " r" + revision + " generation=" + snapshot.getString("generation"));
             } catch (Throwable error) { android.util.Log.e("Easylsp", "Java snapshot load failed: " + id + " r" + revision + " generation=" + snapshot.getString("generation"), error); }

@@ -125,3 +125,14 @@ there is not yet a pending-update configuration migration screen.
 Optional `dependencies` contains at most16 exact pins `{sourceId?,publisherId,catalogPluginId,releaseId}`; missing sourceId means the current source. Clients reject cycles, conflicting versions, unavailable/withdrawn dependencies, and graphs over64 releases. All payloads are verified before the installation transaction. Required capabilities add `native.plt`, `native.runtime-register`, `release.joint`, `release.dependencies`. Optional target.processType is app/isolated/app_zygote; special processes require a Native-only release with exact process scope. The exact name must start with the target package followed by a colon and a nonempty suffix. WebView targets its actual provider package, never the client application; this scope includes matching renderer instances across clients and does not identify the client. Provider-delivered specialization is required; Next817 device tests did not initialize app-zygote descendants or WebView renderers.
 
 Third-party HTTPS sources have explicit user-configured Ed25519 SPKI trust roots, independent signed catalogs and immutable release identities. Catalogs cannot grant trust to keys or sources. Cross-source pins require a source configured by the user. Source identity participates in cache/install matching. The official repository's protected publication and ownership checks remain unchanged.
+
+## Java components and services (host 10)
+
+formatVersion remains 3. Java programs may include java/plugin.json and UTF-8
+text assets under java/, with DEX/APK libraries still in java/lib/. Any additional
+Java text beyond main.java requires minHostVersion=10 and requiredCapabilities containing java.components.
+Its schema=1 components array names id/path/requires (src/*.bsh). Its services
+object contains provides/requires maps of service name to exact positive integer
+version; nonempty service declarations additionally require java.services.
+Consumers and providers share the same target process and process scope. Release
+pins continue to control package installation independently of runtime services.

@@ -1,0 +1,7 @@
+name=service-consumer
+version=1.0
+author=Easylsp contributors
+description=Components and same-process services example
+apiVersion=2
+entry=main.java
+processName=

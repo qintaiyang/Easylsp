@@ -42,7 +42,11 @@ final class StandaloneRuntime {
                 public void state(String id, long rev, String instance, String state, String error) { Log.i("EasylspStandalone", id + " r" + rev + " " + state + " " + error); }
                 public void log(String id, long rev, String instance, String level, String message, Throwable error) { Log.println("ERROR".equals(level) ? Log.ERROR : Log.INFO, "EasylspStandalone", id + ": " + message + (error == null ? "" : "\n" + Log.getStackTraceString(error))); }
             });
-            engine.load(config.getString("id"), config.getLong("revision"), new StringReader(read(apk, "assets/standalone/main.java")), dependencies(apk, app.getClassLoader()));
+            if (io.github.easylsp.runtime.PluginProgram.FORMAT.equals(config.optString("programFormat"))) {
+                try (ZipFile zip = new ZipFile(apk); InputStream input = zip.getInputStream(zip.getEntry("assets/standalone/program.zip"))) {
+                    engine.load(config.getString("id"), config.getLong("revision"), io.github.easylsp.runtime.PluginProgram.read(input), dependencies(apk, app.getClassLoader()));
+                }
+            } else engine.load(config.getString("id"), config.getLong("revision"), new StringReader(read(apk, "assets/standalone/main.java")), dependencies(apk, app.getClassLoader()));
         } catch (Throwable error) { if (engine != null) engine.close(); engine = null; Log.e("EasylspStandalone", "Plugin load failed", error); }
     }
 }

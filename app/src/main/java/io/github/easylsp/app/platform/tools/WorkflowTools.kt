@@ -179,6 +179,13 @@ class WorkflowTools(private val graph: EasylspApp) {
         add("read_plugin_files", "List plugin source and attached text files, or read one relative path.", mapOf("pluginId" to "string", "path" to "string"), listOf("pluginId")) { args ->
             val files = graph.store.readFiles(plugin(args)); if (args.has("path")) JSONObject().put("text", files.getValue(args.getString("path"))) else JSONObject().put("paths", JSONArray(files.keys))
         }
+        add("write_plugin_files", "Update an existing plugin's files together as one revision. Use this for enhancements and fixes inside the existing plugin. files maps paths to UTF-8 text; removePaths removes files/directories. baseRevision is the version read before editing. plugin.json declares internal components and cross-plugin services; read plugin-api first.", mapOf("pluginId" to "string", "files" to "object", "removePaths" to "array", "baseRevision" to "integer"), listOf("pluginId", "files", "baseRevision"), true) { args ->
+            val item = plugin(args)
+            val values = args.getJSONObject("files")
+            val removed = args.optJSONArray("removePaths") ?: JSONArray()
+            val revision = graph.store.writeFiles(item.id, values.keys().asSequence().associateWith { values.getString(it) }, (0 until removed.length()).map { removed.getString(it) }, args.getLong("baseRevision"))
+            JSONObject().put("pluginId", item.id).put("revision", revision)
+        }
         add("write_plugin_file", "Save a text file as a new revision. The runtime entry (main.java or src/main.c) remains required. Native files belong in src/ or include/.", mapOf("pluginId" to "string", "path" to "string", "text" to "string", "delete" to "boolean"), listOf("pluginId", "path"), true) { args ->
             val item = plugin(args); val path = args.getString("path"); io.github.easylsp.app.data.PluginPaths.validate(path)
             val files = graph.store.readFiles(item).toMutableMap(); if (args.optBoolean("delete")) { require(path != item.entry); files.remove(path) } else files[path] = args.getString("text")

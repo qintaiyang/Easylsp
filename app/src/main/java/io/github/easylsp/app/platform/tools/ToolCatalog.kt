@@ -103,24 +103,23 @@ class ToolCatalog(private val graph: EasylspApp) {
         analysis("get_method_smali", "smali", "Read exact method Smali", mapOf("className" to "string", "signature" to "string", "source" to "string"), listOf("className", "signature"))
         analysis("list_resources", "resources", "List APK resource paths", mapOf("query" to "string"), emptyList())
         analysis("read_resource", "resource", "Read supported text/XML resource or binary metadata", mapOf("apk" to "string", "entry" to "string"), listOf("apk", "entry"))
-        add("list_plugins", "List project plugin configurations and process bindings") { JSONObject().put("plugins", JSONArray(graph.store.dao.plugins(project.id).map { JSONObject().put("pluginId", it.id).put("name", it.name).put("revision", it.revision).put("runtime", it.runtime).put("entry", it.entry).put("enabled", it.desiredEnabled).put("processName", it.processName.ifEmpty { project.packageName }) })) }
-        add("read_plugin", "Read plugin source with line pagination", mapOf("pluginId" to "string") + paging, listOf("pluginId")) { args ->
-            val item = plugin(args); val lines = graph.store.read(item.id).lines(); val offset = args.optInt("offset", 0); val limit = args.optInt("limit", 100)
+        add("list_plugins", "List project plugin configurations and process bindings") { JSONObject().put("plugins", JSONArray(graph.store.dao.plugins(project.id).map { JSONObject().put("pluginId", it.id).put("name", it.name).put("revision", it.revision).put("runtime", it.runtime).put("entry", it.entry).put("enabled", it.desiredEnabled).put("program", if (it.runtime == "BEANSHELL") PluginSyntax.validateFiles(graph.store.readFiles(it)) else JSONObject.NULL).put("processName", it.processName.ifEmpty { project.packageName }) })) }
+        add("read_plugin", "Read a plugin file with line pagination; path defaults to the entry", mapOf("pluginId" to "string", "path" to "string") + paging, listOf("pluginId")) { args ->
+            val item = plugin(args); val lines = graph.store.readFiles(item).getValue(args.optString("path", item.entry)).lines(); val offset = args.optInt("offset", 0); val limit = args.optInt("limit", 100)
             require(offset >= 0 && limit in 1..200) { "offset 必须 >= 0；limit 必须在 1..200 范围内" }
             JSONObject().put("pluginId", item.id).put("revision", item.revision).put("runtime", item.runtime).put("entry", item.entry).put("startLine", offset + 1).put("text", lines.drop(offset).take(limit).joinToString("\n")).put("nextOffset", if (offset + limit < lines.size) offset + limit else JSONObject.NULL)
         }
-        add("create_plugin", "Create a disabled plugin. runtime=BEANSHELL (default) or NATIVE; nativeEntry=src/main.c (C17, default) or src/main.cpp (C++17 with static STL). Read native-api; exceptions and STL objects stay inside the plugin.", mapOf("name" to "string", "source" to "string", "processName" to "string", "runtime" to "string", "nativeEntry" to "string"), listOf("name", "source"), true) { args ->
+        add("create_plugin", "Create a disabled, independently installable plugin. Read existing plugins first; enhancements and fixes should update their files, not create patch plugins. runtime=BEANSHELL (default) or NATIVE; nativeEntry=src/main.c (C17, default) or src/main.cpp (C++17 with static STL). Read native-api; exceptions and STL objects stay inside the plugin.", mapOf("name" to "string", "source" to "string", "processName" to "string", "runtime" to "string", "nativeEntry" to "string"), listOf("name", "source"), true) { args ->
             val process = args.optString("processName", project.packageName)
             val item = graph.store.create(project, args.getString("name"), args.getString("source"), processName = process, runtime = args.optString("runtime", "BEANSHELL").uppercase(), nativeEntry = args.optString("nativeEntry", "src/main.c"))
             JSONObject().put("pluginId", item.id).put("revision", item.revision).put("runtime", item.runtime).put("entry", item.entry).put("enabled", false)
         }
-        add("validate_plugin", "Validate BeanShell syntax without executing, saving, publishing or connecting to a target. Supply exactly one of pluginId (saved source) or source (draft text). Returns valid, line/column and nearby source on errors. Does not validate runtime classes or behavior. Native plugins use build_native_plugin.", mapOf("pluginId" to "string", "source" to "string")) { args ->
-            require(args.has("pluginId") xor args.has("source")) { "必须且只能指定 pluginId 或 source" }
+        add("validate_plugin", "Validate a complete BeanShell program without executing. Supply exactly one of pluginId (saved files), files (draft file map), or source (legacy entry). Reports path, line and column. Structural checks include component dependencies and service declarations; availability and behavior require runtime validation.", mapOf("pluginId" to "string", "files" to "object", "source" to "string")) { args ->
+            require(listOf("pluginId", "files", "source").count { args.has(it) } == 1) { "必须指定 pluginId、files、source 中的一项" }
             val item = if (args.has("pluginId")) plugin(args) else null
             if (item != null) require(item.runtime == "BEANSHELL") { "Native 插件请使用 build_native_plugin" }
-            PluginSyntax.validate(if (item != null) graph.store.read(item.id) else args.getString("source")).apply {
-                if (item != null) { put("pluginId", item.id); put("revision", item.revision) }
-            }
+            val files = if (item != null) graph.store.readFiles(item) else if (args.has("files")) args.getJSONObject("files").let { o -> o.keys().asSequence().associateWith { o.getString(it) } } else mapOf("main.java" to args.getString("source"))
+            PluginSyntax.validateFiles(files).apply { if (item != null) { put("pluginId", item.id); put("revision", item.revision) } }
         }
         add("edit_plugin", "Save a new revision; does not change the running instance", mapOf("pluginId" to "string", "source" to "string"), listOf("pluginId", "source"), true,
             preview = { args -> val item = plugin(args); "${item.name} r${item.revision}\n--- 当前源码\n${graph.store.read(item.id)}\n+++ 待保存源码\n${args.getString("source")}" }) { args ->

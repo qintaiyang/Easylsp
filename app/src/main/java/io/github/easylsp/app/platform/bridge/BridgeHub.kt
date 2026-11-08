@@ -57,7 +57,8 @@ class BridgeHub(private val context: Context, private val store: ProjectStore, p
             val session = ownSession(sessionId)
             return runBlocking(Dispatchers.IO) {
                 val project = requireNotNull(store.dao.projectByPackage(session.packageName, session.uid / 100000))
-                store.dao.plugins(project.id).filter { it.runtime == "BEANSHELL" && PluginProcesses.matches(it, session.packageName, session.processName) }.map { plugin -> Bundle().apply {
+                val matching = store.dao.plugins(project.id).filter { it.runtime == "BEANSHELL" && PluginProcesses.matches(it, session.packageName, session.processName) }
+                (store.javaOrder(matching.filter { it.desiredEnabled }) + matching.filter { !it.desiredEnabled }).map { plugin -> Bundle().apply {
                     putString("runtime", plugin.runtime); putString("pluginId", plugin.id); putLong("revision", plugin.revision); putBoolean("desiredEnabled", plugin.desiredEnabled)
                 } }.toMutableList()
             }
@@ -68,7 +69,9 @@ class BridgeHub(private val context: Context, private val store: ProjectStore, p
                 val project = requireNotNull(store.dao.projectByPackage(session.packageName, session.uid / 100000))
                 val plugin = store.dao.plugin(pluginId) ?: throw IllegalArgumentException("插件不存在")
                 if (plugin.runtime != "BEANSHELL" || plugin.projectId != project.id || !PluginProcesses.matches(plugin, session.packageName, session.processName)) throw SecurityException("不能读取其他项目或进程的插件")
-                ParcelFileDescriptor.open(store.sourceFile(plugin.copy(revision = revision)), ParcelFileDescriptor.MODE_READ_ONLY)
+                require(revision in 1..plugin.revision) { "不存在该插件版本" }
+                val file = store.programFile(plugin.copy(revision = revision))
+                ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).also { file.delete() }
             }
         }
         private fun ownPlugin(session: Session, pluginId: String, revision: Long): PluginEntity {
@@ -170,7 +173,10 @@ class BridgeHub(private val context: Context, private val store: ProjectStore, p
         val result = CompletableDeferred<String>()
         pending[id] = Pending(session.id, result)
         try {
-            val fd = if (operation == "loadPlugin" || operation == "reloadPlugin") ParcelFileDescriptor.open(store.sourceFile(requireNotNull(plugin)), ParcelFileDescriptor.MODE_READ_ONLY) else null
+            val fd = if (operation == "loadPlugin" || operation == "reloadPlugin") {
+                val file = store.programFile(requireNotNull(plugin))
+                ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).also { file.delete() }
+            } else null
             fd.use { session.callback.onRequest(id, session.id, operation, args, it) }
             withTimeout(15000) { result.await() }
         } finally { pending.remove(id) }

@@ -145,9 +145,10 @@ public final class HostConnection implements ServiceConnection, PluginEngine.Eve
                             long revision = args.getLong("revision");
                             if (operation.equals("loadPlugin") && engine.alreadyLoaded(pluginId, revision)) break;
                             File cached = cache(pluginId, revision, descriptor);
-                            try (Reader reader = new InputStreamReader(new FileInputStream(cached), StandardCharsets.UTF_8)) {
-                                if (operation.equals("reloadPlugin")) engine.reload(pluginId, revision, reader, dependencyLoader(pluginId, revision)); else engine.load(pluginId, revision, reader, dependencyLoader(pluginId, revision));
-                            }
+                            try (InputStream input = new FileInputStream(cached)) {
+                                PluginProgram program = PluginProgram.read(input);
+                                if (operation.equals("reloadPlugin")) engine.reload(pluginId, revision, program, dependencyLoader(pluginId, revision)); else engine.load(pluginId, revision, program, dependencyLoader(pluginId, revision));
+                            } finally { cached.delete(); }
                         }
                         default -> throw new IllegalArgumentException("未知操作: " + operation);
                     }
@@ -183,7 +184,8 @@ public final class HostConnection implements ServiceConnection, PluginEngine.Eve
                     if (engine.alreadyLoaded(id, revision)) continue;
                     try (ParcelFileDescriptor fd = bridge.openPlugin(session, id, revision)) {
                         File file = cache(id, revision, fd);
-                        try (Reader reader = new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8)) { engine.load(id, revision, reader, dependencyLoader(id, revision)); }
+                        try (InputStream input = new FileInputStream(file)) { engine.load(id, revision, PluginProgram.read(input), dependencyLoader(id, revision)); }
+                        finally { file.delete(); }
                     }
                 } else engine.unload(id);
             } catch (Throwable error) { Log.e("Easylsp", "同步插件失败: " + id, error); }
@@ -206,7 +208,7 @@ public final class HostConnection implements ServiceConnection, PluginEngine.Eve
         // IDs originate from the manager, but cross the Binder boundary here.
         java.util.UUID.fromString(id);
         File dir = new File(app.getCacheDir(), "easylsp"); dir.mkdirs();
-        File file = new File(dir, id + "-" + revision + ".java");
+        File file = new File(dir, id + "-" + revision + ".zip");
         try (InputStream input = new ParcelFileDescriptor.AutoCloseInputStream(fd); OutputStream output = new FileOutputStream(file)) { StreamIO.copy(input, output); }
         return file;
     }

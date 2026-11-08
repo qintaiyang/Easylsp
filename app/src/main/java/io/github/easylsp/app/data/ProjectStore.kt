@@ -4,11 +4,14 @@ import android.content.Context
 import androidx.room.Room
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.*
 import java.util.*
 import java.util.zip.*
 
 class ProjectStore(private val context: Context, databaseName: String = "easylsp.db", private val root: File = File(context.filesDir, "plugins"), private val publishJava: (String, List<PluginEntity>) -> Unit = { _, _ -> }) {
+    private val sourceWrites = Mutex()
     private val database = Room.databaseBuilder(context, EasylspDatabase::class.java, databaseName).addMigrations(EasylspDatabase.MIGRATION_1_2, EasylspDatabase.MIGRATION_2_3, EasylspDatabase.MIGRATION_3_4, EasylspDatabase.MIGRATION_4_5, EasylspDatabase.MIGRATION_5_6, EasylspDatabase.MIGRATION_6_7, EasylspDatabase.MIGRATION_7_8, EasylspDatabase.MIGRATION_8_9, EasylspDatabase.MIGRATION_9_10, EasylspDatabase.MIGRATION_10_11, EasylspDatabase.MIGRATION_11_12, EasylspDatabase.MIGRATION_12_13, EasylspDatabase.MIGRATION_13_14, EasylspDatabase.MIGRATION_14_15, EasylspDatabase.MIGRATION_15_16, EasylspDatabase.MIGRATION_16_17).build()
     val nativePlugins = database.nativePlugins()
     val diagnostics = database.diagnostics()
@@ -37,17 +40,21 @@ class ProjectStore(private val context: Context, databaseName: String = "easylsp
         dao.insertPlugin(plugin)
         plugin
     }
-    suspend fun save(id: String, name: String, author: String, description: String, version: String, source: String, processName: String? = null, files: Map<String, String>? = null) = withContext(Dispatchers.IO) {
+    suspend fun save(id: String, name: String, author: String, description: String, version: String, source: String, processName: String? = null, files: Map<String, String>? = null, baseRevision: Long? = null) = withContext(Dispatchers.IO) { sourceWrites.withLock {
         val previous = requireNotNull(dao.plugin(id)) { "插件不存在" }
+        require(baseRevision == null || previous.revision == baseRevision) { "插件版本已变化，请重新读取后保存" }
         val packageName = requireNotNull(dao.project(previous.projectId)).packageName
         require(name.isNotBlank()) { "插件名不能为空" }
         require(processName == null || previous.nativeProcessType == "app" && (processName.isEmpty() || processName == packageName) || processName.startsWith("$packageName:") && processName.length > packageName.length + 1) { "进程名必须属于项目包名" }
+        val attachments = files ?: readFiles(previous).filterKeys { it != previous.entry }
+        attachments.keys.forEach { PluginPaths.validate(it) }
+        require(attachments.keys.none { key -> attachments.keys.any { other -> other != key && !other.endsWith('/') && key.startsWith("$other/") } }) { "文件和目录路径冲突" }
         val next = previous.copy(localModified = previous.source != "LOCAL" || previous.localModified, name = name, author = author, description = description, version = version, revision = previous.revision + 1, processName = processName ?: previous.processName)
         sourceFile(next).apply { parentFile!!.mkdirs(); writeText(source) }
-        writeAttachments(next, files ?: readFiles(previous).filterKeys { it != previous.entry })
+        writeAttachments(next, attachments)
         libraries(previous).forEach { file -> file.copyTo(File(libraryDirectory(next).apply { mkdirs() }, file.name)) }
         dao.updatePlugin(next)
-    }
+    } }
     suspend fun enable(id: String, enabled: Boolean) = withContext(Dispatchers.IO) {
         val plugin = requireNotNull(dao.plugin(id))
         require(plugin.runtime == "BEANSHELL") { "Native启停必须通过发布服务" }
@@ -94,6 +101,38 @@ class ProjectStore(private val context: Context, databaseName: String = "easylsp
             put(it.relativeTo(directory).invariantSeparatorsPath + if (it.isDirectory) "/" else "", if (it.isFile) it.readText() else "")
         }
     }
+    fun program(plugin: PluginEntity) = io.github.easylsp.runtime.PluginProgram(readFiles(plugin).filterKeys { !it.endsWith('/') })
+    fun programFile(plugin: PluginEntity): File {
+        val program = program(plugin)
+        program.validate()
+        val directory = File(context.cacheDir, "java-programs").apply { mkdirs() }
+        return File.createTempFile(plugin.id + "-r" + plugin.revision + "-", ".zip", directory).apply {
+            outputStream().use { program.write(it) }
+        }
+    }
+    fun javaOrder(plugins: List<PluginEntity>): List<PluginEntity> {
+        val java = plugins.filter { it.runtime == "BEANSHELL" }
+        val programs = java.associate { it.id to program(it) }
+        for (consumer in java) for (service in programs.getValue(consumer.id).requires.keys) {
+            val provider = java.singleOrNull { service in programs.getValue(it.id).provides } ?: error("服务提供者缺失或重复：$service")
+            val packageName = requireNotNull(dao.project(consumer.projectId)).packageName
+            require(provider.processScope == consumer.processScope && (provider.processScope == "all" || provider.processName.ifEmpty { packageName } == consumer.processName.ifEmpty { packageName })) { "服务提供者与消费者须使用相同进程范围：$service" }
+        }
+        val installed = plugins.firstOrNull()?.let { dao.plugins(it.projectId) }.orEmpty()
+        val dependencies = java.associate { plugin -> plugin.id to ReleaseDependencies.installedOrder(plugin, installed).filter { it.runtime == "BEANSHELL" && it.id != plugin.id }.map { it.id } }
+        return io.github.easylsp.runtime.PluginProgram.order(programs, dependencies).map { id -> java.single { it.id == id } }
+    }
+    suspend fun writeFiles(id: String, files: Map<String, String>, removePaths: List<String>, baseRevision: Long) = withContext(Dispatchers.IO) {
+        val previous = requireNotNull(dao.plugin(id))
+        require(previous.revision == baseRevision) { "插件版本已变化，请重新读取后保存" }
+        files.keys.forEach { PluginPaths.validate(it) }
+        removePaths.forEach { PluginPaths.validate(it); require(it != previous.entry) { "不能删除入口" } }
+        val next = readFiles(previous).toMutableMap()
+        removePaths.forEach { path -> next.keys.removeAll { it == path || path.endsWith('/') && it.startsWith(path) } }
+        next.putAll(files)
+        save(id, previous.name, previous.author, previous.description, previous.version, next.getValue(previous.entry), files = next, baseRevision = baseRevision)
+        previous.revision + 1
+    }
     private fun writeAttachments(plugin: PluginEntity, files: Map<String, String>) {
         val directory = attachmentDirectory(plugin)
         files.filterKeys { it != plugin.entry }.forEach { (path, text) ->
@@ -118,7 +157,7 @@ class ProjectStore(private val context: Context, databaseName: String = "easylsp
         val info = Properties().apply { load(StringReader(requireNotNull(entries["info.prop"]) { "缺少 info.prop" }.toString(Charsets.UTF_8))) }
         val runtime = if (info.getProperty("runtime", "beanshell").equals("native", true)) "NATIVE" else "BEANSHELL"
         val entry = if (runtime == "NATIVE") info.getProperty("entry") else "main.java"
-        if (runtime == "BEANSHELL") require(info.getProperty("apiVersion") == "1" && info.getProperty("entry") == entry) { "不支持的插件 API 或入口" }
+        if (runtime == "BEANSHELL") require(info.getProperty("apiVersion") in setOf("1", "2") && info.getProperty("entry") == entry) { "不支持的插件 API 或入口" }
         if ("native/arm64-v8a/plugin.so" in entries) require(info.getProperty("minApi").toInt() <= android.os.Build.VERSION.SDK_INT) { "此插件要求 Android API ${info.getProperty("minApi")}，当前为 ${android.os.Build.VERSION.SDK_INT}" }
         val scope = info.getProperty("processScope", "exact"); require(scope in setOf("exact", "main", "children", "all"))
         val plugin = create(project, requireNotNull(info.getProperty("name")) { "缺少插件名" }, requireNotNull(entries[entry]) { "缺少 $entry" }.toString(Charsets.UTF_8), info.getProperty("author", ""), info.getProperty("description", ""), info.getProperty("version", "1.0"), info.getProperty("processName", ""), runtime, nativeEntry = if (runtime == "NATIVE") entry else "src/main.c")
@@ -202,9 +241,12 @@ class ProjectStore(private val context: Context, databaseName: String = "easylsp
         val source = entries[if (runtime == "NATIVE") nativeEntry else "java/main.java"]?.toString(Charsets.UTF_8)
             ?: "#error This precompiled release does not include source. Select its imported build to publish.\n"
         sourceFile(row).apply { parentFile!!.mkdirs(); writeText(source) }
-        val text = entries.filterKeys { it.startsWith("src/") || it.startsWith("include/") || it in setOf("README.md", "LICENSE", "config.schema.json") }
+        val text = entries.filterKeys { runtime == "NATIVE" && (it.startsWith("src/") || it.startsWith("include/")) || it in setOf("README.md", "LICENSE", "config.schema.json") }
             .filterKeys { it != row.entry }.mapValues { it.value.toString(Charsets.UTF_8) }
         writeAttachments(row, text)
+        if (runtime == "BEANSHELL") writeAttachments(row, entries.filterKeys {
+            it.startsWith("java/") && it != "java/main.java" && !it.startsWith("java/lib/") && it != "java/"
+        }.mapKeys { it.key.removePrefix("java/") }.mapValues { it.value.toString(Charsets.UTF_8) })
         entries.filterKeys { runtime == "BEANSHELL" && it.startsWith("java/lib/") && !it.endsWith('/') }.forEach { (path, bytes) -> File(libraryDirectory(row), path.removePrefix("java/lib/")).apply { parentFile!!.mkdirs(); writeBytes(bytes) } }
         val build = if (runtime == "NATIVE") {
             val id = UUID.randomUUID().toString()
@@ -266,11 +308,14 @@ class ProjectStore(private val context: Context, databaseName: String = "easylsp
     suspend fun exportRelease(id: String, buildId: String?, manifest: org.json.JSONObject, output: OutputStream, javaPluginId: String? = null) = withContext(Dispatchers.IO) {
         val plugin = requireNotNull(dao.plugin(id))
         val entries = linkedMapOf("manifest.json" to manifest.toString(2).toByteArray())
+        val capabilities = manifest.getJSONArray("requiredCapabilities")
+        val fullProgram = (0 until capabilities.length()).any { capabilities.getString(it) == "java.components" }
         if (manifest.getString("runtime") == "JAVA_NATIVE") {
             require(plugin.runtime == "NATIVE") { "联合发行从Native组件准备" }
             val java = requireNotNull(javaPluginId?.let(dao::plugin)) { "联合发行需要明确的Java组件ID" }
             require(java.projectId == plugin.projectId && java.runtime == "BEANSHELL" && java.processScope == plugin.processScope && java.processName == plugin.processName) { "联合组件必须属于同项目和进程范围" }
             entries["java/main.java"] = sourceFile(java).readBytes()
+            readFiles(java).filterKeys { it != "main.java" && (fullProgram || it !in setOf("README.md", "LICENSE", "config.schema.json")) && !it.endsWith('/') }.forEach { (path, text) -> entries["java/" + path] = text.toByteArray() }
             libraries(java).forEach { entries["java/lib/${it.name}"] = it.readBytes() }
         }
         if (plugin.runtime == "NATIVE") {
@@ -283,6 +328,7 @@ class ProjectStore(private val context: Context, databaseName: String = "easylsp
             }
         } else {
             entries["java/main.java"] = sourceFile(plugin).readBytes()
+            readFiles(plugin).filterKeys { it != "main.java" && (fullProgram || it !in setOf("README.md", "LICENSE", "config.schema.json")) && !it.endsWith('/') }.forEach { (path, text) -> entries["java/" + path] = text.toByteArray() }
             libraries(plugin).forEach { entries["java/lib/${it.name}"] = it.readBytes() }
         }
         val files = readFiles(plugin)
@@ -302,6 +348,7 @@ class ProjectStore(private val context: Context, databaseName: String = "easylsp
             setProperty("formatVersion", "2"); setProperty("runtime", "native"); setProperty("nativeApiVersion", "1")
             setProperty("abi", "arm64-v8a"); setProperty("minApi", "31")
         }
+        if (plugin.runtime == "BEANSHELL" && "plugin.json" in readFiles(plugin)) info.setProperty("apiVersion", "2")
         ZipOutputStream(output).use { zip ->
             zip.putNextEntry(ZipEntry("info.prop")); val writer = StringWriter(); info.store(writer, "Easylsp plugin"); zip.write(writer.toString().toByteArray()); zip.closeEntry()
             libraries(plugin).forEach { file -> zip.putNextEntry(ZipEntry("lib/${file.name}")); file.inputStream().use { it.copyTo(zip) }; zip.closeEntry() }

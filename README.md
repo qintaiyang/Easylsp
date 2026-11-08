@@ -4,13 +4,13 @@
 
 Easylsp 是面向 Android 的开源模块开发与调试工具。用自然语言描述目标，让 AI 分析应用、编写 Java／Native 插件、构建运行并查看结果，也可以使用编辑器和调试工具手动开发。
 
-当前版本：**0.9.2**。项目采用 [GPL-3.0-or-later](LICENSE)，第三方组件及许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+当前版本：**0.9.5**。项目采用 [GPL-3.0-or-later](LICENSE)，第三方组件及许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 ## 功能
 
 - **首页**：显示工作状态、作用应用与已启用插件数量，以及管理器版本、引擎版本和设备型号。自动检查管理器正式发行版，发现新版本时显示“升级”按钮，点击进入新版下载页。点击“应用”搜索并勾选作用应用，通过 libxposed 请求或移除框架作用域；点击“插件”查看已启用的 Java／Native 插件。
 - **AI 助手**：支持 OpenAI 兼容、Anthropic 和 Gemini 协议，提供项目会话、附件、历史分支、任务用量和工具授权。
-- **Java 插件**：BeanShell Hook，支持 before／after／replace、版本保存、加载、重载、卸载及日志。
+- **Java 插件**：BeanShell Hook，支持 before／after／replace、多文件组件、组件资源清理、同进程跨插件服务、版本保存、加载、重载、卸载及日志。示例见 [examples/plugins](examples/plugins)，接口约定见 [插件 API](app/src/main/assets/plugin-api.md)。
 - **Native 插件**：支持 C17／C++17、静态 STL、符号与地址 Hook、CHAIN、JNI 注册、ARM64 指令拦截、调用方 PLT 和运行中注册／解除，可选择 Zygisk 或 libxposed 后端并与 Java 插件联合使用。
 - **插件市场**：签名目录、固定预编译发行、配置、更新、回退、联合发行与固定依赖；AI 可使用作者账号创建 GitHub 仓库、提交指定源码、上传 Release 和提交市场收录申请。
 - **应用分析**：查询类、方法、字段、字符串及引用，查看 Java、Smali、Manifest 和资源，检视目标进程与 View 树。

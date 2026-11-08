@@ -59,11 +59,23 @@ import io.github.rosemoe.sora.widget.schemes.EditorColorScheme
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { save() }, enabled = !busy && dirty) { Text("保存") }
+            if (plugin.runtime == "BEANSHELL") TextButton(onClick = {
+                val result = io.github.easylsp.app.platform.tools.PluginSyntax.validateFiles(d.files)
+                if (result.getBoolean("valid")) vm.action { "程序结构与语法通过；尚未执行" }
+                else {
+                    val path = result.optString("path", plugin.entry)
+                    if (path in d.files) editorVM.open(path)
+                    line = result.optInt("line", 1).toString()
+                    fileError = path + ":" + line + " · " + result.optString("message")
+                    panel = "validation"
+                }
+            }) { Text("检查") }
             if (project.kind == "INSTALLED" && plugin.runtime == "BEANSHELL") OutlinedButton(onClick = { vm.command(project, if (state == "RUNNING") "reloadPlugin" else "loadPlugin", plugin) }, enabled = !busy && !dirty && plugin.desiredEnabled && state != "OFFLINE" && project.kind == "INSTALLED") { Text(if (state == "RUNNING") "重载" else "加载") }
             Box {
                 IconButton(onClick = { menu = true }) { Icon(AppIcons.MoreVert, "编辑器菜单") }
                 DropdownMenu(menu, { menu = false }) {
                     listOf("files" to "文件树", "metadata" to "插件元信息", "template" to "Hook 模板", "search" to "搜索 / 替换 / 跳转").forEach { (key, title) -> DropdownMenuItem(text = { Text(title) }, onClick = { panel = key; menu = false }) }
+                    if (plugin.runtime == "BEANSHELL") DropdownMenuItem(text = { Text("添加内部组件") }, onClick = { panel = "component"; filePath = ""; fileError = ""; menu = false })
                     if (project.kind == "INSTALLED" && plugin.runtime == "BEANSHELL") DropdownMenuItem(text = { Text("期望${if (plugin.desiredEnabled) "停用" else "启用"}") }, enabled = !dirty && !busy, onClick = { menu = false; vm.setEnabled(project, plugin, !plugin.desiredEnabled) })
                     if (project.kind == "INSTALLED" && plugin.runtime == "BEANSHELL") DropdownMenuItem(text = { Text("卸载运行实例") }, enabled = project.kind == "INSTALLED" && !busy, onClick = { menu = false; vm.command(project, "unloadPlugin", plugin) })
                     DropdownMenuItem(text = { Text("插件日志") }, onClick = { menu = false; logs() })
@@ -108,7 +120,7 @@ import io.github.rosemoe.sora.widget.schemes.EditorColorScheme
             listOf("{", "}", "(", ")", ";", "\"", "=", ".").forEach { symbol -> TextButton(onClick = { editor?.insertText(symbol, symbol.length) }, contentPadding = PaddingValues(6.dp), modifier = Modifier.widthIn(min = 32.dp)) { Text(symbol) } }
         }
     }
-    if (panel.isNotEmpty()) AlertDialog(onDismissRequest = { panel = "" }, title = { Text(when (panel) { "files" -> "插件文件"; "metadata" -> "插件元信息"; "template" -> "Hook 模板"; "delete" -> "删除插件？"; else -> "搜索与定位" }) }, text = {
+    if (panel.isNotEmpty()) AlertDialog(onDismissRequest = { panel = "" }, title = { Text(when (panel) { "component" -> "添加内部组件"; "validation" -> "程序检查"; "files" -> "插件文件"; "metadata" -> "插件元信息"; "template" -> "Hook 模板"; "delete" -> "删除插件？"; else -> "搜索与定位" }) }, text = {
         Column(Modifier.fillMaxWidth().heightIn(max = 440.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             when (panel) {
                 "files" -> {
@@ -125,6 +137,16 @@ import io.github.rosemoe.sora.widget.schemes.EditorColorScheme
                         try { if (operation == "rename") editorVM.rename(selectedPath, filePath) else editorVM.add(filePath, operation == "folder"); filePath = ""; fileError = "" } catch (e: IllegalArgumentException) { fileError = e.message.orEmpty() }
                     }) { Text(if (operation == "rename") "重命名" else "添加") }
                     if (fileError.isNotEmpty()) Text(fileError, color = colors.error)
+                }
+                "component" -> {
+                    OutlinedTextField(filePath, { filePath = it }, label = { Text("组件名") })
+                    Text("在当前插件内创建源码并登记到 plugin.json，与插件一起保存和加载。")
+                    Button(onClick = { try { editorVM.addComponent(filePath.trim()); panel = "" } catch (e: Exception) { fileError = e.message.orEmpty() } }) { Text("添加") }
+                    if (fileError.isNotEmpty()) Text(fileError, color = colors.error)
+                }
+                "validation" -> {
+                    Text(fileError, color = colors.error)
+                    TextButton(onClick = { line.toIntOrNull()?.let { editor?.setSelection((it - 1).coerceAtLeast(0).coerceAtMost(d.files.getValue(d.active).lines().lastIndex), 0) }; panel = "" }) { Text("定位错误") }
                 }
                 "metadata" -> {
                     OutlinedTextField(d.name, { value -> editorVM.change { it.copy(name = value) } }, label = { Text("名称") })

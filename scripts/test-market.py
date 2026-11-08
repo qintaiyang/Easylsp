@@ -64,6 +64,28 @@ class MarketTest(unittest.TestCase):
             manifest['dependencies'][0]['releaseId']='fixed';manifest['artifacts'].pop();write()
             with self.assertRaises(ValueError):market.read_release(archive)
 
+    def test_component_release_capabilities_and_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / 'program.zip'
+            manifest = dict(formatVersion=3,catalogPluginId='program',publisherId='author',releaseId='one',versionCode=1,versionName='1',name='Program',description='',license='MIT',sourceUrl='https://example.com/source',channel='test',changelog='',publishedAt='2026-11-06',runtime='BEANSHELL',pluginAbi=1,sdkVersion='v2',minHostVersion=10,requiredCapabilities=['java.beanshell','java.components','java.services'],artifacts=[dict(abi='any',minApi=31,artifactPath='java/main.java')],target=dict(packageName='fixture.demo',processScope='main'))
+            program = dict(schema=1, components=[dict(id='echo',path='src/echo.bsh')], services=dict(provides={'example.echo':1}))
+            files = {'README.md':'fixture','LICENSE':'MIT','java/main.java':'','java/plugin.json':json.dumps(program),'java/src/echo.bsh':'return this;'}
+            def read():
+                with zipfile.ZipFile(archive,'w') as z:
+                    for name,data in dict(files, **{'manifest.json':json.dumps(manifest)}).items(): z.writestr(name,data)
+                return market.read_release(archive)
+            self.assertEqual('BEANSHELL', read()['runtime'])
+            manifest['requiredCapabilities'].remove('java.services')
+            with self.assertRaises(ValueError): read()
+            manifest['requiredCapabilities'].append('java.services')
+            manifest['minHostVersion'] = 9
+            with self.assertRaises(ValueError): read()
+            manifest['minHostVersion'] = 10
+            files['java/info.prop'] = 'reserved'
+            with self.assertRaises(ValueError): read()
+            del files['java/info.prop']; del files['java/src/echo.bsh']
+            with self.assertRaises(ValueError): read()
+
     def test_config_contract(self):
         schema = dict(type='object', properties=dict(count=dict(type='integer', minimum=1, maximum=5)), required=['count'], additionalProperties=False)
         market.validate_config(schema, dict(count=2))

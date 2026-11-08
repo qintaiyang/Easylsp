@@ -144,3 +144,14 @@ string minLength/maxLength; nested objects, scripts and unknown constraints are
 rejected. Configuration is at most 8 KiB. Users explicitly publish it for the next
 process. An incompatible update is retained in cache and rejected for installation;
 there is not yet a pending-update configuration migration screen.
+
+## Java program capabilities (host 10)
+
+Multi-file Java programs retain formatVersion=3 and artifactPath=java/main.java.
+Include java/plugin.json and all Java text files under java/; java/lib/ remains
+reserved for DEX/APK libraries. Declare minHostVersion=10 and java.components in
+requiredCapabilities whenever Java text files beyond main.java are present. Programs declaring provided
+or required services must also declare java.services. Service versions are exact
+positive integers. Release dependencies pin installable releases; program services
+name runtime interfaces and do not automatically install or enable providers.
+Java/Native joint releases carry the complete Java program in the same way.

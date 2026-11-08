@@ -15,18 +15,30 @@ import java.security.cert.X509Certificate
 import java.util.zip.ZipFile
 
 class StandalonePackagingTest {
+    @Test fun externalServiceConsumerCannotBeExportedAlone() {
+        val plugin = PluginEntity("12345678-1234-1234-1234-123456789abc", "project", "Consumer")
+        val files = mapOf("main.java" to "", "plugin.json" to """{"schema":1,"services":{"requires":{"example.echo":1}}}""")
+        assertThrows(IllegalArgumentException::class.java) {
+            ApkExporter.packageApk(File("unused"), File("unused"), plugin, "test.target", "", files = files)
+        }
+    }
     @Test fun realTemplateRepackagesAndSignsAsIndependentModule() {
         val template = File(System.getProperty("easylsp.standaloneTemplate")!!)
         val folder = Files.createTempDirectory("easylsp-apk-").toFile()
         val plugin = PluginEntity("12345678-1234-1234-1234-123456789abc", "project", "Test module", revision = 9, processName = "test.target:worker")
         val unsigned = File(folder, "unsigned.apk"); val signed = File(folder, "signed.apk")
         try {
-            ApkExporter.packageApk(template, unsigned, plugin, "test.target", "void onLoad() { plugin.log(\"embedded\"); }")
+            val source = "void onLoad() { plugin.log(\"embedded\"); }"
+            val files = mapOf("main.java" to source, "plugin.json" to """{"schema":1,"components":[{"id":"sample","path":"src/sample.bsh"}]}""", "src/sample.bsh" to "return this;", "assets/data.txt" to "payload")
+            ApkExporter.packageApk(template, unsigned, plugin, "test.target", source, files = files)
             ZipFile(unsigned).use { zip ->
                 val config = JSONObject(zip.getInputStream(zip.getEntry("assets/standalone/config.json")).reader().readText())
                 assertEquals("test.target:worker", config.getString("processName")); assertEquals(9L, config.getLong("revision"))
                 assertEquals("test.target\n", zip.getInputStream(zip.getEntry("META-INF/xposed/scope.list")).reader().readText())
                 assertTrue(zip.getInputStream(zip.getEntry("assets/standalone/main.java")).reader().readText().contains("embedded"))
+                val program = io.github.easylsp.runtime.PluginProgram.read(zip.getInputStream(zip.getEntry("assets/standalone/program.zip")))
+                assertEquals("program-v1", config.getString("programFormat"))
+                assertEquals(files, program.files)
                 assertNull(zip.getEntry("assets/xposed_init"))
                 assertTrue(zip.getInputStream(zip.getEntry("META-INF/xposed/java_init.list")).reader().readText().contains("ModernEntry"))
                 val properties = java.util.Properties().apply { zip.getInputStream(zip.getEntry("META-INF/xposed/module.prop")).use { load(it) } }

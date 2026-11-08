@@ -18,6 +18,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     val dirty = MutableStateFlow(false)
     private var entry = "main.java"
     private var native = false
+    private var baseRevision = 0L
     private var original: Document? = null
     private var pluginId: String? = null
     private data class Write(val id: String, val draft: Document?, val completed: CompletableDeferred<Unit>? = null)
@@ -28,6 +29,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         pluginId = plugin.id
         entry = plugin.entry
         native = plugin.runtime == "NATIVE"
+        baseRevision = plugin.revision
         viewModelScope.launch(Dispatchers.IO) {
             val base = Document(store.readFiles(plugin), plugin.name, plugin.author, plugin.version, plugin.description, plugin.processName, active = entry, opened = listOf(entry))
             original = base
@@ -56,6 +58,19 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         change { it.copy(files = it.files + (key to "")) }
         if (!folder) open(key)
     }
+    fun addComponent(id: String) {
+        require(!native && id.matches(Regex("[A-Za-z][A-Za-z0-9_.-]*"))) { "组件名须以字母开头，仅含字母、数字、点、横线、下划线" }
+        val d = requireNotNull(document.value)
+        val path = "src/$id.bsh"
+        val manifest = d.files["plugin.json"]?.let { JSONObject(it) } ?: JSONObject().put("schema", 1)
+        val components = manifest.optJSONArray("components") ?: org.json.JSONArray()
+        require(path !in d.files && (0 until components.length()).none { components.getJSONObject(it).getString("id") == id }) { "组件已存在" }
+        components.put(JSONObject().put("id", id).put("path", path).put("requires", org.json.JSONArray()))
+        manifest.put("components", components)
+        val source = listOf("void onLoad() { }", "void onUnload() { }", "return this;").joinToString(10.toChar().toString())
+        change { it.copy(files = it.files + mapOf("plugin.json" to manifest.toString(2), path to source)) }
+        open(path)
+    }
     fun remove(path: String) {
         require(path != entry && !(path.endsWith('/') && entry.startsWith(path))) { "不能删除入口文件或其父目录" }
         change { d ->
@@ -77,7 +92,8 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     }
     suspend fun save(plugin: PluginEntity) {
         val d = requireNotNull(document.value)
-        store.save(plugin.id, d.name, d.author, d.description, d.version, d.files.getValue(entry), d.process, d.files)
+        store.save(plugin.id, d.name, d.author, d.description, d.version, d.files.getValue(entry), d.process, d.files, baseRevision)
+        baseRevision++
         original = d; updateDirty(); persist(document.value.takeUnless { it == d })
     }
     suspend fun keepDraft() { persist(document.value) }

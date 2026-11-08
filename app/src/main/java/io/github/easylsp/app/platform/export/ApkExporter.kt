@@ -19,9 +19,15 @@ import javax.security.auth.x500.X500Principal
 class ApkExporter(private val graph: EasylspApp) {
     companion object {
         fun packageName(id: String) = "io.github.easylsp.generated.p" + UUID.fromString(id).toString().replace("-", "")
-        fun packageApk(template: File, output: File, plugin: PluginEntity, target: String, source: String, libraries: Map<String, ByteArray> = emptyMap()) {
+        fun packageApk(template: File, output: File, plugin: PluginEntity, target: String, source: String, libraries: Map<String, ByteArray> = emptyMap(), files: Map<String, String> = mapOf("main.java" to source)) {
+            val program = io.github.easylsp.runtime.PluginProgram(files.filterKeys { !it.endsWith('/') })
+            program.validate()
+            require(program.requires.isEmpty()) { "独立 APK 不能依赖外部插件服务；请将提供者作为内部组件或使用管理器发布" }
+            val bundle = ByteArrayOutputStream().also { program.write(it) }.toByteArray()
             val config = JSONObject().put("id", plugin.id).put("name", plugin.name).put("packageName", target).put("processName", plugin.processName.ifEmpty { target }).put("revision", plugin.revision).put("processScope", plugin.processScope)
             val replacements = mapOf("assets/standalone/config.json" to config.toString().toByteArray(), "assets/standalone/main.java" to source.toByteArray(), "META-INF/xposed/scope.list" to "$target\n".toByteArray()) + libraries.mapKeys { "assets/standalone/lib/${it.key}" }
+            config.put("programFormat", io.github.easylsp.runtime.PluginProgram.FORMAT)
+            val payloads = replacements + mapOf("assets/standalone/config.json" to config.toString().toByteArray(), "assets/standalone/program.zip" to bundle)
             val counter = object : FilterOutputStream(output.outputStream()) {
                 var position = 0L
                 override fun write(value: Int) { out.write(value); position++ }
@@ -32,7 +38,7 @@ class ApkExporter(private val graph: EasylspApp) {
                 for (entry in input.entries().asSequence()) {
                     val name = entry.name
                     val signature = name.uppercase(Locale.ROOT).let { it == "META-INF/MANIFEST.MF" || it.startsWith("META-INF/") && (it.endsWith(".SF") || it.endsWith(".RSA") || it.endsWith(".DSA") || it.endsWith(".EC")) }
-                    if (!signature && name !in replacements) {
+                    if (!signature && name !in payloads) {
                         var bytes = input.getInputStream(entry).use { it.readBytes() }
                         if (name == "AndroidManifest.xml") bytes = BinaryManifest.renamePackage(bytes, "io.github.easylsp.generated.template", packageName(plugin.id))
                         val destination = ZipEntry(name)
@@ -44,7 +50,7 @@ class ApkExporter(private val graph: EasylspApp) {
                         zip.putNextEntry(destination); zip.write(bytes); zip.closeEntry()
                     }
                 }
-                replacements.forEach { (name, bytes) -> zip.putNextEntry(ZipEntry(name)); zip.write(bytes); zip.closeEntry() }
+                payloads.forEach { (name, bytes) -> zip.putNextEntry(ZipEntry(name)); zip.write(bytes); zip.closeEntry() }
             } }
         }
     }
@@ -73,7 +79,7 @@ class ApkExporter(private val graph: EasylspApp) {
         val template = File(folder, "${plugin.id}-template.apk")
         try {
             graph.assets.open("standalone-template.apk").use { input -> template.outputStream().use { input.copyTo(it) } }
-            packageApk(template, unsigned, plugin, project.packageName, graph.store.read(pluginId), graph.store.libraries(plugin).associate { it.name to it.readBytes() })
+            packageApk(template, unsigned, plugin, project.packageName, graph.store.read(pluginId), graph.store.libraries(plugin).associate { it.name to it.readBytes() }, graph.store.readFiles(plugin))
             ApkSigner.Builder(listOf(signer())).setInputApk(unsigned).setOutputApk(signed).setMinSdkVersion(31)
                 .setV1SigningEnabled(false).setV2SigningEnabled(true).setV3SigningEnabled(false).setV4SigningEnabled(false).build().sign()
             signed

@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "services": {
+    "provides": {
+      "example.echo": 1
+    }
+  }
+}

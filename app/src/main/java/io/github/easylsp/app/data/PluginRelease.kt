@@ -29,7 +29,7 @@ data class PluginRelease(val manifest: JSONObject) {
         require(minimum <= api) { "此发行要求 Android API $minimum，当前为 $api" }
     }
     companion object {
-        val capabilities = setOf("native.symbol", "native.elf-vaddr", "native.module-lifecycle", "native.chain", "native.jni-register", "native.intercept", "native.plt", "native.runtime-register", "java.beanshell", "release.joint", "release.dependencies")
+        val capabilities = setOf("native.symbol", "native.elf-vaddr", "native.module-lifecycle", "native.chain", "native.jni-register", "native.intercept", "native.plt", "native.runtime-register", "java.beanshell", "java.components", "java.services", "release.joint", "release.dependencies")
         fun read(bytes: ByteArray): PluginRelease {
             val m = JSONObject(bytes.toString(Charsets.UTF_8))
             require(m.getInt("formatVersion") == 3) { "不支持的发行格式" }
@@ -37,7 +37,7 @@ data class PluginRelease(val manifest: JSONObject) {
             listOf("name", "versionName", "license", "sdkVersion", "channel", "publishedAt").forEach { require(m.getString(it).isNotBlank()) { "缺少发行字段：$it" } }
             m.getString("description"); m.getString("changelog")
             require(m.getString("sourceUrl").startsWith("https://")) { "源码 URL 必须使用 HTTPS" }
-            require(m.getLong("versionCode") > 0 && m.getInt("pluginAbi") == 1 && m.getInt("minHostVersion") in 1..9) { "发行版本或宿主/插件 ABI 不兼容" }
+            require(m.getLong("versionCode") > 0 && m.getInt("pluginAbi") == 1 && m.getInt("minHostVersion") in 1..10) { "发行版本或宿主/插件 ABI 不兼容" }
             val runtime = m.getString("runtime")
             require(runtime in setOf("NATIVE", "BEANSHELL", "JAVA_NATIVE")) { "未知发行运行时" }
             val required = m.getJSONArray("requiredCapabilities")
@@ -86,11 +86,17 @@ data class PluginRelease(val manifest: JSONObject) {
             require("info.prop" !in files) { "v3 包不能混用旧 info.prop" }
             require("README.md" in files && "LICENSE" in files) { "发行必须附带 README.md 与 LICENSE" }
             val common = setOf("manifest.json", "README.md", "LICENSE", "config.schema.json")
-            require(files.keys.all { path -> path in common || ("NATIVE" in release.runtimes && (path in setOf("native/", "native/arm64-v8a/", "native/arm64-v8a/plugin.so") || path.startsWith("src/") || path.startsWith("include/"))) || ("BEANSHELL" in release.runtimes && (path in setOf("java/", "java/main.java", "java/lib/") || path.startsWith("java/lib/"))) }) { "发行包含未声明的载荷" }
+            require(files.keys.all { path -> path in common || ("NATIVE" in release.runtimes && (path in setOf("native/", "native/arm64-v8a/", "native/arm64-v8a/plugin.so") || path.startsWith("src/") || path.startsWith("include/"))) || ("BEANSHELL" in release.runtimes && path.startsWith("java/")) }) { "发行包含未声明的载荷" }
             if ("NATIVE" in release.runtimes) NativePluginArtifact.validate(files.getValue("native/arm64-v8a/plugin.so"), release.artifact("NATIVE").getInt("minApi"))
             if ("BEANSHELL" in release.runtimes) {
                 require("java/main.java" in files) { "缺少Java入口" }
                 files.filterKeys { it.startsWith("java/lib/") && !it.endsWith('/') }.forEach { (path, data) -> PluginLibraries.validate(path.removePrefix("java/"), data) }
+                files.keys.filter { it.startsWith("java/") && it != "java/" && it != "java/lib/" && !it.startsWith("java/lib/") }.forEach { PluginPaths.validate(it.removePrefix("java/")) }
+                val program = io.github.easylsp.runtime.PluginProgram(files.filterKeys { it.startsWith("java/") && !it.startsWith("java/lib/") && !it.endsWith('/') }.mapKeys { it.key.removePrefix("java/") }.mapValues { it.value.toString(Charsets.UTF_8) })
+                program.validate()
+                val capabilities = release.manifest.getJSONArray("requiredCapabilities").let { a -> (0 until a.length()).map { a.getString(it) }.toSet() }
+                if (program.files.keys.any { it != "main.java" }) require("java.components" in capabilities && release.manifest.getInt("minHostVersion") >= 10) { "多文件程序需要 java.components 和 minHostVersion=10" }
+                if (program.requires.isNotEmpty() || program.provides.isNotEmpty()) require("java.services" in capabilities) { "服务声明需要 java.services" }
             }
             release.manifest.optJSONObject("config")?.let { config ->
                 val schema = JSONObject(files.getValue("config.schema.json").toString(Charsets.UTF_8))

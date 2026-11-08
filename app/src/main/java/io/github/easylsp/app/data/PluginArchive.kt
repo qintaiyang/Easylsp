@@ -49,6 +49,9 @@ object PluginArchive {
             files["native/arm64-v8a/plugin.so"]?.let { NativePluginArtifact.validate(it, info.getProperty("minApi").toInt()) }
         } else {
             require("main.java" in files && files.keys.none { it.startsWith("native/") }) { "缺少 main.java 或 Java ZIP 包含 native 产物" }
+            require(info.getProperty("apiVersion") in setOf("1", "2")) { "不支持的 Java API" }
+            require("plugin.json" !in files || info.getProperty("apiVersion") == "2") { "多文件执行需要 apiVersion=2" }
+            io.github.easylsp.runtime.PluginProgram(files.filterKeys { !it.startsWith("lib/") && !it.endsWith('/') && it != "info.prop" }.mapValues { it.value.toString(Charsets.UTF_8) }).validate()
         }
         require(files.keys.none { key -> files.keys.any { other -> other != key && !other.endsWith('/') && key.startsWith("$other/") } }) { "ZIP 文件和目录路径冲突" }
         return files
