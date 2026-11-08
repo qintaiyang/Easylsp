@@ -14,7 +14,13 @@ class EasylspApp : Application() {
 
         }
     }
-    suspend fun initializeManagement() = withContext(Dispatchers.IO) { models.migrateConnections(); skillPackages.installPresets(); if (root.preferred.value) { root.refresh().await(); managerKeepalive.reconcile() } }
+    suspend fun initializeManagement() = withContext(Dispatchers.IO) {
+        models.migrateConnections()
+        skillPackages.installPresets()
+        if (root.preferred.value && root.refresh().await().granted) {
+            managerKeepalive.reconcile()
+        }
+    }
     val managerKeepalive by lazy { io.github.easylsp.app.platform.root.ManagerKeepalive(this) }
     val executions by lazy { io.github.easylsp.app.platform.terminal.WorkspaceExecution(filesDir, commandWrapper = root::wrap).apply {
         pty = { project, id, command, cwd, timeout, output -> terminals.execute(project, id, command, cwd, timeout, output) }
