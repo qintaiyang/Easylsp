@@ -1,0 +1,44 @@
+name: Publish release
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful Android build run on main
+        required: true
+      version:
+        description: Version of the existing release draft (without v)
+        required: true
+permissions:
+  actions: read
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN_ID: ${{ inputs.run_id }}
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Check build and release draft
+        run: |
+          gh api "repos/$GH_REPO/actions/runs/$RUN_ID" > run.json
+          jq -e '.conclusion == "success" and .head_branch == "main" and .path == ".github/workflows/android.yml"' run.json
+          gh release view "v$VERSION" --json isDraft --jq '.isDraft' | grep -qx true
+      - uses: actions/download-artifact@v4
+        with:
+          name: easylsp-debug
+          path: artifacts
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.run_id }}
+      - name: Upload build outputs and publish
+        run: |
+          mkdir release-assets
+          cp artifacts/app/build/outputs/apk/debug/app-debug.apk "release-assets/Easylsp-$VERSION-arm64-v8a-debug.apk"
+          cp artifacts/app/build/outputs/apk/release/app-release.apk "release-assets/Easylsp-$VERSION-arm64-v8a-release.apk"
+          cp artifacts/demo-target/build/outputs/apk/debug/demo-target-debug.apk "release-assets/Easylsp-demo-$VERSION-debug.apk"
+          cp artifacts/zygisk-host/build/outputs/*.zip release-assets/
+          gh release upload "v$VERSION" release-assets/* --clobber
+          gh release view "v$VERSION" --json body --jq '.body' > release-notes.md
+          printf '\n本次发布附件来自 GitHub Actions：%s\n' "$(jq -r .html_url run.json)" >> release-notes.md
+          gh release edit "v$VERSION" --target "$(jq -r .head_sha run.json)" --notes-file release-notes.md --draft=false --latest
